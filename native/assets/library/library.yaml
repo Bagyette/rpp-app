@@ -1,0 +1,7 @@
+assets:
+  - id: builtin-emergency-exit
+    file: emergency-exit.png
+    name_key: library.emergency_exit
+    category: safety
+    default_width_cm: 40
+    default_height_cm: 40

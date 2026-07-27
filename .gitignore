@@ -1,0 +1,11 @@
+native/target/
+previous_versions/
+my-plan.rpp
+RPP-Native-*.exe
+native/assets/icons/*-source.png
+*.rpp.bak
+*.rpp.tmp
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

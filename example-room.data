@@ -1,0 +1,15 @@
+RPP-PLAN 2
+# Readable example data: a 4 m by 3 m room with a 90 cm door.
+UNITS cm
+
+WALL north 0 0 400 0 20 exterior false 34383b
+WALL east 400 0 400 300 20 exterior false 34383b
+WALL south 400 300 0 300 20 exterior false 34383b
+WALL west 0 300 0 0 20 exterior false 34383b
+
+DOOR entrance north 0.5 90 single left inward false 464646
+WINDOW garden-window south 0.5 120 bay false 2d7391
+OBJECT dining-table table 200 170 140 80 0 false e1e4e2 5a5a5a
+TEXT room-name 200 80 18 0 false 34383b true "Living room"
+AREA floor-area false e8f0e5 6c8b68 20 20 380 20 380 280 20 280
+COMPASS north-arrow 460 70 80 0 false 34383b

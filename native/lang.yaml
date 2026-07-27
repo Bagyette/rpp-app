@@ -1,0 +1,773 @@
+default_language: en-US
+languages:
+  en-US:
+    name: English (US)
+    strings:
+      app.ready: Ready
+      app.restored: Autosaved plan restored
+      app.title: RPP — Ran Plan Plan
+      action.new: New
+      action.open: Open
+      action.save: Save
+      action.save_dirty: Save •
+      action.save_as: Save as
+      action.save_as_plan: RPP plan…
+      action.export_svg: SVG image…
+      action.export_png: PNG image…
+      action.export_pdf: PDF page…
+      action.import_image: Import image
+      action.fit_plan: Fit
+      action.place_image: Place
+      action.remove_asset: Remove from project and delete its instances
+      action.cancel: Cancel
+      action.discard: Discard
+      action.duplicate: Duplicate  Ctrl+D
+      action.undo: Undo
+      action.redo: Redo
+      action.split_middle: Split at midpoint
+      action.delete_wall: Delete wall
+      action.delete_line: Delete line
+      action.delete_text: Delete text
+      action.delete_door: Delete door
+      action.delete_image: Delete image
+      action.delete_window: Delete window
+      action.delete_object: Delete object
+      action.delete_area: Delete area
+      action.delete_compass: Delete compass rose
+      dialog.unsaved_title: Unsaved plan
+      dialog.unsaved_body: This plan contains unsaved changes.
+      dialog.open_title: Open an RPP plan
+      dialog.save_title: Save the RPP plan
+      dialog.save_as_title: Save the RPP plan as
+      dialog.default_filename: my-plan.rpp
+      dialog.export_svg_title: Export the complete plan as SVG
+      dialog.export_png_title: Export the complete plan as PNG
+      dialog.export_pdf_title: Export the complete plan as a scaled PDF
+      dialog.default_svg_filename: my-plan.svg
+      dialog.default_png_filename: my-plan.png
+      dialog.default_pdf_filename: my-plan.pdf
+      dialog.import_image_title: Import an image
+      file.filter: RPP plan
+      file.image_filter: Image
+      file.svg_filter: SVG image
+      file.png_filter: PNG image
+      file.pdf_filter: PDF document
+      format.unknown: Unknown file format
+      format.unsupported_version: "Unsupported RPP version: {version}"
+      format.invalid_header: Invalid RPP header
+      format.too_large: The RPP file is too large
+      format.corrupted: The RPP file is corrupted
+      format.invalid_plan: The plan content is invalid
+      format.syntax: "Syntax error on line {line}. Check the RPP-PLAN documentation."
+      status.opened: "Opened: {path}"
+      status.saved: "Saved: {path}"
+      status.read_error: "Could not read file: {error}"
+      status.invalid_file: "File rejected: {error}"
+      status.save_error: "Could not save file: {error}"
+      status.legacy_opened: Legacy format opened · Save to convert it
+      status.new_plan: New plan
+      status.undo: Action undone
+      status.redo: Action redone
+      status.wall_added: Wall added · click to continue, Escape to finish
+      status.line_added: Line added
+      status.text_added: Text added
+      status.door_added: Door added
+      status.wall_deleted: Wall deleted
+      status.line_deleted: Line deleted
+      status.text_deleted: Text deleted
+      status.door_deleted: Door deleted
+      status.wall_duplicated: Wall duplicated
+      status.line_duplicated: Line duplicated
+      status.text_duplicated: Text duplicated
+      status.door_duplicated: Door duplicated
+      status.wall_split: Wall split into two segments
+      status.wall_too_short: Wall is too short to split
+      status.split_blocked: "Cannot split: a door crosses the midpoint"
+      status.door_removed_short_wall: "Door removed: the wall became too short"
+      status.wall_locked: Wall is locked
+      status.line_locked: Line is locked
+      status.text_locked: Text is locked
+      status.door_locked: Door is locked
+      status.image_imported: Image imported and embedded in the project
+      status.image_reused: Another image instance was placed
+      status.image_deleted: Image instance deleted
+      status.image_duplicated: Image instance duplicated
+      status.image_locked: Image is locked
+      status.asset_deleted: "Image removed from the project · {count} instance(s) deleted"
+      status.image_read_error: Could not read the image
+      status.image_invalid: Unsupported or invalid image
+      status.image_too_large: The image exceeds the 32 MB limit
+      status.window_added: Window added
+      status.window_deleted: Window deleted
+      status.window_duplicated: Window duplicated
+      status.window_locked: Window is locked
+      status.window_removed_short_wall: "Window removed: the wall became too short"
+      status.object_added: Object added
+      status.object_deleted: Object deleted
+      status.object_duplicated: Object duplicated
+      status.object_locked: Object is locked
+      status.area_added: Area created
+      status.area_deleted: Area deleted
+      status.area_duplicated: Area duplicated
+      status.area_locked: Area is locked
+      status.compass_added: Compass rose added
+      status.compass_deleted: Compass rose deleted
+      status.compass_duplicated: Compass rose duplicated
+      status.compass_locked: Compass rose is locked
+      status.opening_overlap: This opening overlaps another door or window
+      status.no_opening_space: No free space remains on this wall
+      status.exported: "Exported: {path}"
+      status.export_error: "{format} export failed: {error}"
+      status.nothing_to_export: The plan contains nothing to export
+      status.view_fitted: Plan fitted to the window
+      status.view_reset: View reset
+      status.item_moved: "Moved by {distance} {unit}"
+      status.items_deleted: "{count} items deleted"
+      status.items_selected: "{count} items selected"
+      tool.select: Select
+      tool.wall: Wall
+      tool.line: Line
+      tool.measure: Measure
+      tool.text: Text
+      tool.door: Door
+      tool.window: Window
+      tool.object: Object
+      tool.area: Area
+      tool.compass: Compass
+      tool.select_instruction: Click to select · Shift+click to add · Delete to remove
+      tool.wall_instruction: Click successive points · Shift locks an axis
+      tool.line_instruction: Drag from one point to another · Shift locks an axis
+      tool.measure_instruction: Drag to measure · the measurement disappears on release
+      tool.text_instruction: Click to place editable text
+      tool.door_instruction: Click a wall to place a door
+      tool.window_instruction: Click a wall to place a window
+      tool.object_instruction: Click the plan to place an object
+      tool.area_instruction: Click polygon corners · Enter, double-click, or right-click to close
+      tool.compass_instruction: Click to place a movable compass rose
+      panel.properties: Properties
+      panel.empty_selection: Select a plan item to edit its properties.
+      panel.multiple_selection: "{count} items selected"
+      panel.display: Display
+      panel.image_library: Project images
+      panel.defaults: Remembered defaults
+      panel.navigation: NAVIGATION
+      default.wall_thickness: Wall thickness
+      default.door_width: Door width
+      default.window_width: Window width
+      default.text_size: Text size
+      property.grid: Grid
+      property.snap: Snapping
+      property.spacing: Spacing
+      property.length: Length
+      property.angle: Angle
+      property.start_x: Start X
+      property.start_y: Start Y
+      property.end_x: End X
+      property.end_y: End Y
+      property.thickness: Thickness
+      property.type: Type
+      property.locked: Locked
+      property.width: Width
+      property.position: Position
+      property.x: X
+      property.y: Y
+      property.height: Height
+      property.rotation: Rotation
+      property.text_size: Text size
+      property.color: Color
+      property.fill_color: Fill color
+      property.stroke_color: Outline color
+      property.font: Font
+      property.bold: Bold
+      property.hinge: Hinge
+      property.swing: Swing
+      property.unit: Unit
+      property.area: Surface
+      property.size: Size
+      selection.wall: Selected wall
+      selection.line: Selected line
+      selection.text: Selected text
+      selection.door: Selected door
+      selection.image: Selected image
+      selection.window: Selected window
+      selection.object: Selected object
+      selection.area: Selected area
+      selection.compass: Selected compass rose
+      wall.interior: Interior
+      wall.exterior: Exterior
+      door.single: Single
+      door.double: Double
+      door.sliding: Sliding
+      side.left: Left
+      side.right: Right
+      swing.inward: Inward
+      swing.outward: Outward
+      window.standard: Standard
+      window.bay: Bay window
+      object.rectangle: Rectangle
+      object.bed: Bed
+      object.table: Table
+      object.sofa: Sofa
+      object.wardrobe: Wardrobe
+      object.desk: Desk
+      text.default: Text
+      export.include_distances: Include distances in exports
+      export.pdf_scale: Drawing scale
+      export.pdf_does_not_fit: "The plan does not fit on the selected page at 1:{scale}. Choose a larger scale denominator."
+      hint.undo: "Ctrl+Z: undo"
+      hint.redo: "Ctrl+Y: redo"
+      hint.pan: "Middle mouse: pan"
+      hint.zoom: "Wheel: zoom"
+      hint.fit_plan: "Fit the complete plan · Home"
+      hint.first_wall: Draw your first wall
+      hint.first_wall_detail: Click successive points on the grid.
+      status.counts: "{walls} wall{wall_suffix} · {lines} line{line_suffix} · {texts} text{text_suffix} · {areas} area{area_suffix} · {doors} door{door_suffix} · {windows} window{window_suffix} · {objects} object{object_suffix} · {images} image{image_suffix} · {compasses} compass"
+      status.cursor: "X {x} · Y {y} {unit}   |"
+      action.settings: Settings
+      action.lock_all: Lock all
+      action.unlock_all: Unlock all
+      action.delete_arrow: Delete arrow
+      tool.arrow: Arrow
+      tool.arrow_instruction: Drag from the tail to the tip · 64 precise directions
+      selection.arrow: Arrow selected
+      property.name: Name
+      property.style: Style
+      property.orientation: Orientation
+      property.theme: Theme
+      property.language: Language
+      arrow_style.open: Open
+      arrow_style.open-bold: Open bold
+      arrow_style.hollow: Hollow
+      arrow_style.solid: Solid
+      status.arrow_added: Arrow added
+      status.arrow_deleted: Arrow deleted
+      status.arrow_duplicated: Arrow duplicated
+      status.arrow_locked: This arrow is locked
+      status.items_moved: Items moved
+      status.items_duplicated: Items duplicated
+      export.paper: Paper
+      settings.title: Settings
+      settings.general: General
+      settings.images: Imported images
+      image_limit.source: Source
+      image_limit.current: "Maximum embedded image size: {limit}"
+      image_limit.help: "The last slider position keeps the source bytes. Other positions resize and encode images automatically."
+      theme.light: Light
+      theme.dark: Dark
+      theme.warm_dark: Warm dark
+      library.emergency_exit: Emergency exit
+      language.label: Language
+  fr-FR:
+    name: Français
+    strings:
+      app.ready: Prêt
+      app.restored: Plan restauré automatiquement
+      app.title: RPP — Ran Plan Plan
+      action.new: Nouveau
+      action.open: Ouvrir
+      action.save: Enregistrer
+      action.save_dirty: Enregistrer •
+      action.save_as: Enregistrer sous
+      action.save_as_plan: Plan RPP…
+      action.export_svg: Image SVG…
+      action.export_png: Image PNG…
+      action.export_pdf: Page PDF…
+      action.import_image: Importer une image
+      action.fit_plan: Ajuster
+      action.place_image: Placer
+      action.remove_asset: Retirer du projet et supprimer ses instances
+      action.cancel: Annuler
+      action.discard: Abandonner
+      action.duplicate: Dupliquer  Ctrl+D
+      action.undo: Annuler
+      action.redo: Rétablir
+      action.split_middle: Couper au milieu
+      action.delete_wall: Supprimer le mur
+      action.delete_line: Supprimer la ligne
+      action.delete_text: Supprimer le texte
+      action.delete_door: Supprimer la porte
+      action.delete_image: Supprimer l’image
+      action.delete_window: Supprimer la fenêtre
+      action.delete_object: Supprimer l’objet
+      action.delete_area: Supprimer la surface
+      action.delete_compass: Supprimer la rose des vents
+      dialog.unsaved_title: Plan modifié
+      dialog.unsaved_body: Ce plan contient des modifications non enregistrées.
+      dialog.open_title: Ouvrir un plan RPP
+      dialog.save_title: Enregistrer le plan RPP
+      dialog.save_as_title: Enregistrer le plan RPP sous
+      dialog.default_filename: mon-plan.rpp
+      dialog.export_svg_title: Exporter le plan complet en SVG
+      dialog.export_png_title: Exporter le plan complet en PNG
+      dialog.export_pdf_title: Exporter le plan complet en PDF à l’échelle
+      dialog.default_svg_filename: mon-plan.svg
+      dialog.default_png_filename: mon-plan.png
+      dialog.default_pdf_filename: mon-plan.pdf
+      dialog.import_image_title: Importer une image
+      file.filter: Plan RPP
+      file.image_filter: Image
+      file.svg_filter: Image SVG
+      file.png_filter: Image PNG
+      file.pdf_filter: Document PDF
+      format.unknown: Format de fichier inconnu
+      format.unsupported_version: "Version RPP non prise en charge : {version}"
+      format.invalid_header: En-tête RPP invalide
+      format.too_large: Le fichier RPP est trop volumineux
+      format.corrupted: Le fichier RPP est corrompu
+      format.invalid_plan: Le contenu du plan est invalide
+      format.syntax: "Erreur de syntaxe à la ligne {line}. Consultez la documentation RPP-PLAN."
+      status.opened: "Ouvert : {path}"
+      status.saved: "Enregistré : {path}"
+      status.read_error: "Lecture impossible : {error}"
+      status.invalid_file: "Fichier refusé : {error}"
+      status.save_error: "Échec de l’enregistrement : {error}"
+      status.legacy_opened: Ancien format ouvert · Enregistrer pour le convertir
+      status.new_plan: Nouveau plan
+      status.undo: Action annulée
+      status.redo: Action rétablie
+      status.wall_added: Mur ajouté · cliquer pour continuer, Échap pour terminer
+      status.line_added: Ligne ajoutée
+      status.text_added: Texte ajouté
+      status.door_added: Porte ajoutée
+      status.wall_deleted: Mur supprimé
+      status.line_deleted: Ligne supprimée
+      status.text_deleted: Texte supprimé
+      status.door_deleted: Porte supprimée
+      status.wall_duplicated: Mur dupliqué
+      status.line_duplicated: Ligne dupliquée
+      status.text_duplicated: Texte dupliqué
+      status.door_duplicated: Porte dupliquée
+      status.wall_split: Mur coupé en deux segments
+      status.wall_too_short: Mur trop court pour être coupé
+      status.split_blocked: "Coupe impossible : une porte traverse le milieu"
+      status.door_removed_short_wall: "Porte supprimée : le mur est devenu trop court"
+      status.wall_locked: Mur verrouillé
+      status.line_locked: Ligne verrouillée
+      status.text_locked: Texte verrouillé
+      status.door_locked: Porte verrouillée
+      status.image_imported: Image importée et intégrée au projet
+      status.image_reused: Une nouvelle instance de l’image a été placée
+      status.image_deleted: Instance d’image supprimée
+      status.image_duplicated: Instance d’image dupliquée
+      status.image_locked: Image verrouillée
+      status.asset_deleted: "Image retirée du projet · {count} instance(s) supprimée(s)"
+      status.image_read_error: Impossible de lire l’image
+      status.image_invalid: Image invalide ou non prise en charge
+      status.image_too_large: L’image dépasse la limite de 32 Mo
+      status.window_added: Fenêtre ajoutée
+      status.window_deleted: Fenêtre supprimée
+      status.window_duplicated: Fenêtre dupliquée
+      status.window_locked: Fenêtre verrouillée
+      status.window_removed_short_wall: "Fenêtre supprimée : le mur est devenu trop court"
+      status.object_added: Objet ajouté
+      status.object_deleted: Objet supprimé
+      status.object_duplicated: Objet dupliqué
+      status.object_locked: Objet verrouillé
+      status.area_added: Surface créée
+      status.area_deleted: Surface supprimée
+      status.area_duplicated: Surface dupliquée
+      status.area_locked: Surface verrouillée
+      status.compass_added: Rose des vents ajoutée
+      status.compass_deleted: Rose des vents supprimée
+      status.compass_duplicated: Rose des vents dupliquée
+      status.compass_locked: Rose des vents verrouillée
+      status.opening_overlap: Cette ouverture chevauche une autre porte ou fenêtre
+      status.no_opening_space: Il ne reste aucun espace libre sur ce mur
+      status.exported: "Exporté : {path}"
+      status.export_error: "Échec de l’export {format} : {error}"
+      status.nothing_to_export: Le plan ne contient rien à exporter
+      status.view_fitted: Plan ajusté à la fenêtre
+      status.view_reset: Vue réinitialisée
+      status.item_moved: "Déplacé de {distance} {unit}"
+      status.items_deleted: "{count} éléments supprimés"
+      status.items_selected: "{count} éléments sélectionnés"
+      tool.select: Sélection
+      tool.wall: Mur
+      tool.line: Ligne
+      tool.measure: Mesure
+      tool.text: Texte
+      tool.door: Porte
+      tool.window: Fenêtre
+      tool.object: Objet
+      tool.area: Surface
+      tool.compass: Boussole
+      tool.select_instruction: Cliquer pour sélectionner · Maj+clic pour ajouter · Suppr pour effacer
+      tool.wall_instruction: Cliquer les sommets successifs · Maj verrouille un axe
+      tool.line_instruction: Glisser d’un point à l’autre · Maj verrouille un axe
+      tool.measure_instruction: Glisser pour mesurer · la mesure disparaît au relâchement
+      tool.text_instruction: Cliquer pour placer un texte modifiable
+      tool.door_instruction: Cliquer sur un mur pour poser une porte
+      tool.window_instruction: Cliquer sur un mur pour poser une fenêtre
+      tool.object_instruction: Cliquer dans le plan pour placer un objet
+      tool.area_instruction: Cliquer les sommets · Entrée, double-clic ou clic droit pour fermer
+      tool.compass_instruction: Cliquer pour placer une rose des vents déplaçable
+      panel.properties: Propriétés
+      panel.empty_selection: Sélectionnez un élément du plan pour modifier ses propriétés.
+      panel.multiple_selection: "{count} éléments sélectionnés"
+      panel.display: Affichage
+      panel.image_library: Images du projet
+      panel.defaults: Paramètres mémorisés
+      panel.navigation: NAVIGATION
+      default.wall_thickness: Épaisseur des murs
+      default.door_width: Largeur des portes
+      default.window_width: Largeur des fenêtres
+      default.text_size: Taille du texte
+      property.grid: Grille
+      property.snap: Accrochage
+      property.spacing: Pas
+      property.length: Longueur
+      property.angle: Angle
+      property.start_x: Début X
+      property.start_y: Début Y
+      property.end_x: Fin X
+      property.end_y: Fin Y
+      property.thickness: Épaisseur
+      property.type: Type
+      property.locked: Verrouillé
+      property.width: Largeur
+      property.position: Position
+      property.x: X
+      property.y: Y
+      property.height: Hauteur
+      property.rotation: Rotation
+      property.text_size: Taille du texte
+      property.color: Couleur
+      property.fill_color: Couleur de remplissage
+      property.stroke_color: Couleur du contour
+      property.font: Police
+      property.bold: Gras
+      property.hinge: Charnière
+      property.swing: Ouverture
+      property.unit: Unité
+      property.area: Superficie
+      property.size: Taille
+      selection.wall: Mur sélectionné
+      selection.line: Ligne sélectionnée
+      selection.text: Texte sélectionné
+      selection.door: Porte sélectionnée
+      selection.image: Image sélectionnée
+      selection.window: Fenêtre sélectionnée
+      selection.object: Objet sélectionné
+      selection.area: Surface sélectionnée
+      selection.compass: Rose des vents sélectionnée
+      wall.interior: Intérieur
+      wall.exterior: Extérieur
+      door.single: Simple
+      door.double: Double
+      door.sliding: Coulissante
+      side.left: Gauche
+      side.right: Droite
+      swing.inward: Intérieur
+      swing.outward: Extérieur
+      window.standard: Standard
+      window.bay: Baie vitrée
+      object.rectangle: Rectangle
+      object.bed: Lit
+      object.table: Table
+      object.sofa: Canapé
+      object.wardrobe: Armoire
+      object.desk: Bureau
+      text.default: Texte
+      export.include_distances: Inclure les distances dans les exports
+      export.pdf_scale: Échelle du dessin
+      export.pdf_does_not_fit: "Le plan ne tient pas sur la page choisie à l’échelle 1:{scale}. Choisissez un dénominateur plus grand."
+      hint.undo: "Ctrl+Z : annuler"
+      hint.redo: "Ctrl+Y : rétablir"
+      hint.pan: "Clic molette : déplacer"
+      hint.zoom: "Molette : zoom"
+      hint.fit_plan: "Afficher tout le plan · Début"
+      hint.first_wall: Tracez votre premier mur
+      hint.first_wall_detail: Cliquez sur les sommets successifs de la grille.
+      status.counts: "{walls} mur{wall_suffix} · {lines} ligne{line_suffix} · {texts} texte{text_suffix} · {areas} surface{area_suffix} · {doors} porte{door_suffix} · {windows} fenêtre{window_suffix} · {objects} objet{object_suffix} · {images} image{image_suffix} · {compasses} rose(s)"
+      status.cursor: "X {x} · Y {y} {unit}   |"
+      action.settings: Paramètres
+      action.lock_all: Tout verrouiller
+      action.unlock_all: Tout déverrouiller
+      action.delete_arrow: Supprimer la flèche
+      tool.arrow: Flèche
+      tool.arrow_instruction: Glissez de la base vers la pointe · 64 directions précises
+      selection.arrow: Flèche sélectionnée
+      property.name: Nom
+      property.style: Style
+      property.orientation: Orientation
+      property.theme: Thème
+      property.language: Langue
+      arrow_style.open: Ouverte
+      arrow_style.open-bold: Ouverte épaisse
+      arrow_style.hollow: Creuse
+      arrow_style.solid: Pleine
+      status.arrow_added: Flèche ajoutée
+      status.arrow_deleted: Flèche supprimée
+      status.arrow_duplicated: Flèche dupliquée
+      status.arrow_locked: Cette flèche est verrouillée
+      status.items_moved: Éléments déplacés
+      status.items_duplicated: Éléments dupliqués
+      export.paper: Papier
+      settings.title: Paramètres
+      settings.general: Général
+      settings.images: Images importées
+      image_limit.source: Source
+      image_limit.current: "Poids maximal d’une image intégrée : {limit}"
+      image_limit.help: "La dernière position conserve les octets source. Les autres redimensionnent et encodent automatiquement les images."
+      theme.light: Clair
+      theme.dark: Sombre
+      theme.warm_dark: Sombre chaleureux
+      library.emergency_exit: Sortie de secours
+      language.label: Langue
+  es-ES:
+    name: Español
+    strings:
+      app.ready: Listo
+      app.restored: Plano autoguardado restaurado
+      app.title: RPP — Ran Plan Plan
+      action.new: Nuevo
+      action.open: Abrir
+      action.save: Guardar
+      action.save_dirty: Guardar •
+      action.save_as: Guardar como
+      action.save_as_plan: Plano RPP…
+      action.export_svg: Imagen SVG…
+      action.export_png: Imagen PNG…
+      action.export_pdf: PDF…
+      action.import_image: Importar imagen
+      action.fit_plan: Ajustar
+      action.place_image: Colocar
+      action.remove_asset: Eliminar del proyecto y borrar sus instancias
+      action.cancel: Cancelar
+      action.discard: Descartar
+      action.duplicate: Duplicar  Ctrl+D
+      action.undo: Deshacer
+      action.redo: Rehacer
+      action.delete_wall: Eliminar muro
+      action.delete_line: Eliminar línea
+      action.delete_text: Eliminar texto
+      action.delete_door: Eliminar puerta
+      action.delete_image: Eliminar imagen
+      action.delete_window: Eliminar ventana
+      action.delete_object: Eliminar objeto
+      action.delete_area: Eliminar área
+      action.delete_compass: Eliminar rosa de los vientos
+      action.delete_arrow: Eliminar flecha
+      action.settings: Ajustes
+      action.lock_all: Bloquear todo
+      action.unlock_all: Desbloquear todo
+      tool.select: Seleccionar
+      tool.wall: Muro
+      tool.line: Línea
+      tool.measure: Medir
+      tool.text: Texto
+      tool.door: Puerta
+      tool.window: Ventana
+      tool.object: Objeto
+      tool.area: Área
+      tool.compass: Norte
+      tool.arrow: Flecha
+      tool.select_instruction: Haz clic para seleccionar · Mayús+clic para selección múltiple
+      tool.wall_instruction: Haz clic en puntos sucesivos para crear muros
+      tool.line_instruction: Arrastra para crear una línea
+      tool.measure_instruction: Arrastra para medir sin ajuste
+      tool.text_instruction: Haz clic para añadir texto
+      tool.door_instruction: Haz clic en un muro para añadir una puerta
+      tool.window_instruction: Haz clic en un muro para añadir una ventana
+      tool.object_instruction: Haz clic para añadir un objeto
+      tool.area_instruction: Haz clic en el contorno · Intro para cerrar
+      tool.compass_instruction: Haz clic para añadir una rosa de los vientos
+      tool.arrow_instruction: Arrastra desde la base hasta la punta · 64 direcciones precisas
+      panel.properties: Propiedades
+      panel.empty_selection: Selecciona un elemento para editar sus propiedades.
+      panel.multiple_selection: "{count} elementos seleccionados"
+      panel.display: Visualización
+      panel.image_library: Biblioteca de imágenes
+      panel.defaults: Valores predeterminados
+      panel.navigation: Navegación
+      property.grid: Cuadrícula
+      property.snap: Ajuste
+      property.spacing: Espaciado
+      property.length: Longitud
+      property.angle: Ángulo
+      property.thickness: Grosor
+      property.type: Tipo
+      property.locked: Bloqueado
+      property.width: Ancho
+      property.height: Alto
+      property.rotation: Rotación
+      property.color: Color
+      property.fill_color: Color de relleno
+      property.stroke_color: Color del borde
+      property.font: Fuente
+      property.bold: Negrita
+      property.unit: Unidad
+      property.name: Nombre
+      property.style: Estilo
+      property.orientation: Orientación
+      property.theme: Tema
+      property.language: Idioma
+      selection.wall: Muro seleccionado
+      selection.line: Línea seleccionada
+      selection.text: Texto seleccionado
+      selection.door: Puerta seleccionada
+      selection.image: Imagen seleccionada
+      selection.window: Ventana seleccionada
+      selection.object: Objeto seleccionado
+      selection.area: Área seleccionada
+      selection.compass: Rosa de los vientos seleccionada
+      selection.arrow: Flecha seleccionada
+      object.rectangle: Rectángulo
+      object.bed: Cama
+      object.table: Mesa
+      object.sofa: Sofá
+      object.wardrobe: Armario
+      object.desk: Escritorio
+      arrow_style.open: Abierta
+      arrow_style.open-bold: Abierta gruesa
+      arrow_style.hollow: Hueca
+      arrow_style.solid: Sólida
+      export.include_distances: Incluir distancias en las exportaciones
+      export.pdf_scale: Escala
+      export.paper: Papel
+      settings.title: Ajustes
+      settings.general: General
+      settings.images: Imágenes importadas
+      image_limit.source: Fuente
+      image_limit.current: "Tamaño máximo de imagen integrada: {limit}"
+      image_limit.help: "La última posición conserva los bytes originales. Las demás redimensionan y codifican las imágenes automáticamente."
+      theme.light: Claro
+      theme.dark: Oscuro
+      theme.warm_dark: Oscuro cálido
+      library.emergency_exit: Salida de emergencia
+      action.split_middle: Dividir en el punto medio
+      dialog.unsaved_title: Plano sin guardar
+      dialog.unsaved_body: Este plano contiene cambios sin guardar.
+      dialog.open_title: Abrir un plano RPP
+      dialog.save_title: Guardar el plano RPP
+      dialog.save_as_title: Guardar el plano RPP como
+      dialog.default_filename: mi-plano.rpp
+      dialog.export_svg_title: Exportar el plano completo como SVG
+      dialog.export_png_title: Exportar el plano completo como PNG
+      dialog.export_pdf_title: Exportar el plano completo como PDF a escala
+      dialog.default_svg_filename: mi-plano.svg
+      dialog.default_png_filename: mi-plano.png
+      dialog.default_pdf_filename: mi-plano.pdf
+      dialog.import_image_title: Importar una imagen
+      file.filter: Plano RPP
+      file.image_filter: Imagen
+      file.svg_filter: Imagen SVG
+      file.png_filter: Imagen PNG
+      file.pdf_filter: Documento PDF
+      format.unknown: Formato de archivo desconocido
+      format.unsupported_version: "Versión RPP no compatible: {version}"
+      format.invalid_header: Cabecera RPP no válida
+      format.too_large: El archivo RPP es demasiado grande
+      format.corrupted: El archivo RPP está dañado
+      format.invalid_plan: El contenido del plano no es válido
+      format.syntax: "Error de sintaxis en la línea {line}. Consulta la documentación de RPP-PLAN."
+      status.opened: "Abierto: {path}"
+      status.saved: "Guardado: {path}"
+      status.read_error: "No se pudo leer el archivo: {error}"
+      status.invalid_file: "Archivo rechazado: {error}"
+      status.save_error: "No se pudo guardar el archivo: {error}"
+      status.legacy_opened: Formato antiguo abierto · Guarda para convertirlo
+      status.new_plan: Plano nuevo
+      status.undo: Acción deshecha
+      status.redo: Acción rehecha
+      status.wall_added: Muro añadido · haz clic para continuar, Escape para terminar
+      status.line_added: Línea añadida
+      status.text_added: Texto añadido
+      status.door_added: Puerta añadida
+      status.wall_deleted: Muro eliminado
+      status.line_deleted: Línea eliminada
+      status.text_deleted: Texto eliminado
+      status.door_deleted: Puerta eliminada
+      status.wall_duplicated: Muro duplicado
+      status.line_duplicated: Línea duplicada
+      status.text_duplicated: Texto duplicado
+      status.door_duplicated: Puerta duplicada
+      status.wall_split: Muro dividido en dos segmentos
+      status.wall_too_short: El muro es demasiado corto para dividirlo
+      status.split_blocked: "No se puede dividir: una puerta cruza el punto medio"
+      status.door_removed_short_wall: "Puerta eliminada: el muro se volvió demasiado corto"
+      status.wall_locked: El muro está bloqueado
+      status.line_locked: La línea está bloqueada
+      status.text_locked: El texto está bloqueado
+      status.door_locked: La puerta está bloqueada
+      status.image_imported: Imagen importada e integrada en el proyecto
+      status.image_reused: Se colocó otra instancia de la imagen
+      status.image_deleted: Instancia de imagen eliminada
+      status.image_duplicated: Instancia de imagen duplicada
+      status.image_locked: La imagen está bloqueada
+      status.asset_deleted: "Imagen eliminada del proyecto · {count} instancia(s) eliminada(s)"
+      status.image_read_error: No se pudo leer la imagen
+      status.image_invalid: Imagen no compatible o no válida
+      status.image_too_large: La imagen supera el límite de 32 MB
+      status.window_added: Ventana añadida
+      status.window_deleted: Ventana eliminada
+      status.window_duplicated: Ventana duplicada
+      status.window_locked: La ventana está bloqueada
+      status.window_removed_short_wall: "Ventana eliminada: el muro se volvió demasiado corto"
+      status.object_added: Objeto añadido
+      status.object_deleted: Objeto eliminado
+      status.object_duplicated: Objeto duplicado
+      status.object_locked: El objeto está bloqueado
+      status.area_added: Área creada
+      status.area_deleted: Área eliminada
+      status.area_duplicated: Área duplicada
+      status.area_locked: El área está bloqueada
+      status.compass_added: Rosa de los vientos añadida
+      status.compass_deleted: Rosa de los vientos eliminada
+      status.compass_duplicated: Rosa de los vientos duplicada
+      status.compass_locked: La rosa de los vientos está bloqueada
+      status.opening_overlap: Esta abertura se superpone a otra puerta o ventana
+      status.no_opening_space: No queda espacio libre en este muro
+      status.exported: "Exportado: {path}"
+      status.export_error: "Error al exportar {format}: {error}"
+      status.nothing_to_export: El plano no contiene nada que exportar
+      status.view_fitted: Plano ajustado a la ventana
+      status.view_reset: Vista restablecida
+      status.item_moved: "Desplazado {distance} {unit}"
+      status.items_deleted: "{count} elementos eliminados"
+      status.items_selected: "{count} elementos seleccionados"
+      default.wall_thickness: Grosor del muro
+      default.door_width: Ancho de la puerta
+      default.window_width: Ancho de la ventana
+      default.text_size: Tamaño del texto
+      property.start_x: X inicial
+      property.start_y: Y inicial
+      property.end_x: X final
+      property.end_y: Y final
+      property.position: Posición
+      property.x: X
+      property.y: Y
+      property.text_size: Tamaño del texto
+      property.hinge: Bisagra
+      property.swing: Apertura
+      property.area: Superficie
+      property.size: Tamaño
+      wall.interior: Interior
+      wall.exterior: Exterior
+      door.single: Simple
+      door.double: Doble
+      door.sliding: Corredera
+      side.left: Izquierda
+      side.right: Derecha
+      swing.inward: Hacia dentro
+      swing.outward: Hacia fuera
+      window.standard: Estándar
+      window.bay: Ventanal
+      text.default: Texto
+      export.pdf_does_not_fit: "El plano no cabe en la página elegida a escala 1:{scale}. Elige un denominador mayor."
+      hint.undo: "Ctrl+Z: deshacer"
+      hint.redo: "Ctrl+Y: rehacer"
+      hint.pan: "Botón central: desplazar"
+      hint.zoom: "Rueda: zoom"
+      hint.fit_plan: Ajustar todo el plano · Inicio
+      hint.first_wall: Dibuja tu primer muro
+      hint.first_wall_detail: Haz clic en puntos sucesivos de la cuadrícula.
+      status.counts: "{walls} muro{wall_suffix} · {lines} línea{line_suffix} · {texts} texto{text_suffix} · {areas} área{area_suffix} · {doors} puerta{door_suffix} · {windows} ventana{window_suffix} · {objects} objeto{object_suffix} · {images} imagen{image_suffix} · {compasses} rosa(s)"
+      status.cursor: "X {x} · Y {y} {unit}   |"
+      status.arrow_added: Flecha añadida
+      status.arrow_deleted: Flecha eliminada
+      status.arrow_duplicated: Flecha duplicada
+      status.arrow_locked: La flecha está bloqueada
+      status.items_moved: Elementos desplazados
+      status.items_duplicated: Elementos duplicados
+      language.label: Idioma
