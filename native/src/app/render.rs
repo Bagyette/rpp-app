@@ -2,70 +2,136 @@ use super::*;
 
 impl RppApp {
     pub(super) fn paint_canvas(&self, painter: &Painter, rect: Rect) {
-        painter.rect_filled(rect, 0.0, CANVAS);
+        painter.rect_filled(rect, 0.0, self.canvas_fill());
         self.paint_grid(painter, rect);
 
-        for area in &self.plan.areas {
-            let selected = self.is_selected(&Selection::Area(area.id.clone()));
-            self.paint_area(painter, rect, area, selected);
-        }
-        for image in &self.plan.images {
-            let selected = self.is_selected(&Selection::Image(image.id.clone()));
-            self.paint_image(painter, rect, image, selected);
-        }
-        for object in &self.plan.objects {
-            let selected = self.is_selected(&Selection::Object(object.id.clone()));
-            self.paint_object(painter, rect, object, selected);
-        }
-        for line in &self.plan.lines {
-            let selected = self.is_selected(&Selection::Line(line.id.clone()));
-            let color = if selected {
-                ACCENT
-            } else {
-                Color32::from_rgb(line.color[0], line.color[1], line.color[2])
-            };
-            painter.line_segment(
-                [
-                    self.world_to_screen(rect, line.start()),
-                    self.world_to_screen(rect, line.end()),
-                ],
-                Stroke::new(if selected { 2.5 } else { 1.5 }, color),
-            );
-        }
-        for wall in &self.plan.walls {
-            let selected = self.is_selected(&Selection::Wall(wall.id.clone()));
-            self.paint_wall(painter, rect, wall, selected);
-        }
-        for door in &self.plan.doors {
-            let Some(wall) = self.plan.walls.iter().find(|wall| wall.id == door.wall_id) else {
+        for layer in &self.plan.layers {
+            if !layer.visible {
                 continue;
-            };
-            let selected = self.is_selected(&Selection::Door(door.id.clone()));
-            self.paint_door(painter, rect, door, wall, selected);
-        }
-        for window in &self.plan.windows {
-            let Some(wall) = self
-                .plan
-                .walls
-                .iter()
-                .find(|wall| wall.id == window.wall_id)
-            else {
-                continue;
-            };
-            let selected = self.is_selected(&Selection::Window(window.id.clone()));
-            self.paint_window(painter, rect, window, wall, selected);
-        }
-        for text in &self.plan.texts {
-            let selected = self.is_selected(&Selection::Text(text.id.clone()));
-            self.paint_text(painter, rect, text, selected);
-        }
-        for compass in &self.plan.compasses {
-            let selected = self.is_selected(&Selection::Compass(compass.id.clone()));
-            self.paint_compass(painter, rect, compass, selected);
-        }
-        for arrow in &self.plan.arrows {
-            let selected = self.is_selected(&Selection::Arrow(arrow.id.clone()));
-            self.paint_arrow(painter, rect, arrow, selected);
+            }
+            let layer_id = layer.id.as_str();
+            for room in &self.plan.rooms {
+                if self.plan.layer_id_for(&room.id) != layer_id || !self.plan.item_visible(&room.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Room(room.id.clone()));
+                self.paint_room(painter, rect, room, selected);
+            }
+            for area in &self.plan.areas {
+                if self.plan.layer_id_for(&area.id) != layer_id || !self.plan.item_visible(&area.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Area(area.id.clone()));
+                self.paint_area(painter, rect, area, selected);
+            }
+            for image in &self.plan.images {
+                if self.plan.layer_id_for(&image.id) != layer_id
+                    || !self.plan.item_visible(&image.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Image(image.id.clone()));
+                self.paint_image(painter, rect, image, selected);
+            }
+            for object in &self.plan.objects {
+                if self.plan.layer_id_for(&object.id) != layer_id
+                    || !self.plan.item_visible(&object.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Object(object.id.clone()));
+                self.paint_object(painter, rect, object, selected);
+            }
+            for line in &self.plan.lines {
+                if self.plan.layer_id_for(&line.id) != layer_id || !self.plan.item_visible(&line.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Line(line.id.clone()));
+                let color = if selected {
+                    ACCENT
+                } else {
+                    Color32::from_rgb(line.color[0], line.color[1], line.color[2])
+                        .gamma_multiply(self.plan.item_opacity(&line.id))
+                };
+                painter.line_segment(
+                    [
+                        self.world_to_screen(rect, line.start()),
+                        self.world_to_screen(rect, line.end()),
+                    ],
+                    Stroke::new(if selected { 2.5 } else { 1.5 }, color),
+                );
+            }
+            for wall in &self.plan.walls {
+                if self.plan.layer_id_for(&wall.id) != layer_id || !self.plan.item_visible(&wall.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Wall(wall.id.clone()));
+                self.paint_wall(painter, rect, wall, selected);
+            }
+            for door in &self.plan.doors {
+                if self.plan.layer_id_for(&door.id) != layer_id || !self.plan.item_visible(&door.id)
+                {
+                    continue;
+                }
+                let Some(wall) = self.plan.walls.iter().find(|wall| wall.id == door.wall_id) else {
+                    continue;
+                };
+                if !self.plan.item_visible(&wall.id) {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Door(door.id.clone()));
+                self.paint_door(painter, rect, door, wall, selected);
+            }
+            for window in &self.plan.windows {
+                if self.plan.layer_id_for(&window.id) != layer_id
+                    || !self.plan.item_visible(&window.id)
+                {
+                    continue;
+                }
+                let Some(wall) = self
+                    .plan
+                    .walls
+                    .iter()
+                    .find(|wall| wall.id == window.wall_id)
+                else {
+                    continue;
+                };
+                if !self.plan.item_visible(&wall.id) {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Window(window.id.clone()));
+                self.paint_window(painter, rect, window, wall, selected);
+            }
+            for text in &self.plan.texts {
+                if self.plan.layer_id_for(&text.id) != layer_id || !self.plan.item_visible(&text.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Text(text.id.clone()));
+                self.paint_text(painter, rect, text, selected);
+            }
+            for compass in &self.plan.compasses {
+                if self.plan.layer_id_for(&compass.id) != layer_id
+                    || !self.plan.item_visible(&compass.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Compass(compass.id.clone()));
+                self.paint_compass(painter, rect, compass, selected);
+            }
+            for arrow in &self.plan.arrows {
+                if self.plan.layer_id_for(&arrow.id) != layer_id
+                    || !self.plan.item_visible(&arrow.id)
+                {
+                    continue;
+                }
+                let selected = self.is_selected(&Selection::Arrow(arrow.id.clone()));
+                self.paint_arrow(painter, rect, arrow, selected);
+            }
         }
         if let Some(draft) = &self.draft {
             let start = self.world_to_screen(rect, draft.start);
@@ -111,6 +177,19 @@ impl RppApp {
             painter.rect_filled(label_rect, 0.0, ACCENT);
             painter.galley(midpoint - galley.size() / 2.0, galley, Color32::WHITE);
         }
+        if let Some(selection_box) = &self.selection_box {
+            let selection_rect = Rect::from_two_pos(
+                self.world_to_screen(rect, selection_box.start),
+                self.world_to_screen(rect, selection_box.end),
+            );
+            painter.rect_filled(selection_rect, 0.0, ACCENT.gamma_multiply(0.08));
+            painter.rect_stroke(
+                selection_rect,
+                0.0,
+                Stroke::new(1.2, ACCENT),
+                StrokeKind::Inside,
+            );
+        }
         if !self.area_draft.is_empty() {
             let mut points: Vec<Pos2> = self
                 .area_draft
@@ -122,6 +201,20 @@ impl RppApp {
             }
             painter.add(Shape::line(points, Stroke::new(1.8, ACCENT)));
             for point in &self.area_draft {
+                painter.circle_filled(self.world_to_screen(rect, *point), 3.0, ACCENT);
+            }
+        }
+        if !self.room_draft.is_empty() {
+            let mut points: Vec<Pos2> = self
+                .room_draft
+                .iter()
+                .map(|point| self.world_to_screen(rect, *point))
+                .collect();
+            if let Some(pointer) = painter.ctx().pointer_hover_pos() {
+                points.push(pointer);
+            }
+            painter.add(Shape::line(points, Stroke::new(1.8, ACCENT)));
+            for point in &self.room_draft {
                 painter.circle_filled(self.world_to_screen(rect, *point), 3.0, ACCENT);
             }
         }
@@ -153,6 +246,7 @@ impl RppApp {
     }
 
     fn paint_image(&self, painter: &Painter, rect: Rect, image: &ImageObject, selected: bool) {
+        let opacity = self.plan.item_opacity(&image.id);
         let angle = image.rotation.to_radians();
         let cosine = angle.cos();
         let sine = angle.sin();
@@ -199,7 +293,7 @@ impl RppApp {
             mesh.vertices.push(egui::epaint::Vertex {
                 pos: positions[index],
                 uv: uvs[index],
-                color: Color32::WHITE,
+                color: Color32::from_white_alpha((255.0 * opacity) as u8),
             });
         }
         mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
@@ -210,8 +304,9 @@ impl RppApp {
     }
 
     fn paint_area(&self, painter: &Painter, rect: Rect, area: &AreaShape, selected: bool) {
-        let points: Vec<Pos2> = area
-            .points
+        let opacity = self.plan.item_opacity(&area.id);
+        let normalized = normalized_polygon_points(&area.points);
+        let points: Vec<Pos2> = normalized
             .iter()
             .map(|point| self.world_to_screen(rect, *point))
             .collect();
@@ -222,7 +317,7 @@ impl RppApp {
             area.fill_color[0],
             area.fill_color[1],
             area.fill_color[2],
-            120,
+            (120.0 * opacity) as u8,
         );
         let stroke = if selected {
             ACCENT
@@ -232,9 +327,22 @@ impl RppApp {
                 area.stroke_color[1],
                 area.stroke_color[2],
             )
+            .gamma_multiply(opacity)
         };
+        let mut mesh = Mesh::default();
         for triangle in triangulate_polygon(&points) {
-            painter.add(Shape::convex_polygon(triangle.to_vec(), fill, Stroke::NONE));
+            let base = mesh.vertices.len() as u32;
+            for point in triangle {
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: point,
+                    uv: Pos2::ZERO,
+                    color: fill,
+                });
+            }
+            mesh.indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }
+        if !mesh.indices.is_empty() {
+            painter.add(Shape::mesh(mesh));
         }
         painter.add(Shape::closed_line(
             points,
@@ -250,6 +358,71 @@ impl RppApp {
         );
     }
 
+    fn paint_room(&self, painter: &Painter, rect: Rect, room: &Room, selected: bool) {
+        let points = normalized_polygon_points(&room.points)
+            .iter()
+            .map(|point| self.world_to_screen(rect, *point))
+            .collect::<Vec<_>>();
+        if points.len() < 3 {
+            return;
+        }
+        let opacity = self.plan.item_opacity(&room.id);
+        let fill_alpha = if room.fill_visible {
+            (78.0 * opacity).round() as u8
+        } else {
+            0
+        };
+        let fill = Color32::from_rgba_unmultiplied(
+            room.fill_color[0],
+            room.fill_color[1],
+            room.fill_color[2],
+            fill_alpha,
+        );
+        if room.fill_visible {
+            let mut mesh = Mesh::default();
+            for triangle in triangulate_polygon(&points) {
+                let base = mesh.vertices.len() as u32;
+                for point in triangle {
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: point,
+                        uv: Pos2::ZERO,
+                        color: fill,
+                    });
+                }
+                mesh.indices.extend_from_slice(&[base, base + 1, base + 2]);
+            }
+            if !mesh.indices.is_empty() {
+                painter.add(Shape::mesh(mesh));
+            }
+        }
+        let outline = if selected {
+            ACCENT
+        } else {
+            Color32::from_rgba_unmultiplied(60, 105, 140, (150.0 * opacity) as u8)
+        };
+        painter.add(Shape::closed_line(
+            points,
+            Stroke::new(if selected { 2.0 } else { 1.0 }, outline),
+        ));
+        let center = crate::room_detection::polygon_center(&room.points);
+        let title = if room.name.trim().is_empty() {
+            self.localizer.text("room.default_name")
+        } else {
+            room.name.trim().to_owned()
+        };
+        painter.text(
+            self.world_to_screen(rect, center),
+            Align2::CENTER_CENTER,
+            format!(
+                "{}\n{}",
+                title,
+                format_area(room.area_square_centimeters(), self.unit)
+            ),
+            FontId::proportional(12.0),
+            outline,
+        );
+    }
+
     fn paint_compass(&self, painter: &Painter, rect: Rect, compass: &CompassRose, selected: bool) {
         let center = self.world_to_screen(rect, Point::new(compass.x, compass.y));
         let radius = compass.size * self.zoom * 0.5;
@@ -260,6 +433,7 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(compass.color[0], compass.color[1], compass.color[2])
+                .gamma_multiply(self.plan.item_opacity(&compass.id))
         };
         painter.circle_stroke(center, radius, Stroke::new(1.3, color));
         painter.line_segment([south, north], Stroke::new(2.0, color));
@@ -305,6 +479,7 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(arrow.color[0], arrow.color[1], arrow.color[2])
+                .gamma_multiply(self.plan.item_opacity(&arrow.id))
         };
         let thin = (arrow.width * 0.08 * self.zoom).max(1.2);
         let bold = (arrow.width * 0.18 * self.zoom).max(2.0);
@@ -412,6 +587,7 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(text.color[0], text.color[1], text.color[2])
+                .gamma_multiply(self.plan.item_opacity(&text.id))
         };
         let galley = painter.layout(
             text.text.clone(),
@@ -441,6 +617,7 @@ impl RppApp {
     }
 
     fn paint_object(&self, painter: &Painter, rect: Rect, object: &PlanObject, selected: bool) {
+        let opacity = self.plan.item_opacity(&object.id);
         let positions = rotated_rectangle(
             object.x,
             object.y,
@@ -459,6 +636,7 @@ impl RppApp {
                     object.stroke_color[1],
                     object.stroke_color[2],
                 )
+                .gamma_multiply(opacity)
             },
         );
         painter.add(Shape::convex_polygon(
@@ -467,7 +645,7 @@ impl RppApp {
                 object.fill_color[0],
                 object.fill_color[1],
                 object.fill_color[2],
-                210,
+                (210.0 * opacity) as u8,
             ),
             stroke,
         ));
@@ -489,7 +667,8 @@ impl RppApp {
                 object.stroke_color[0],
                 object.stroke_color[1],
                 object.stroke_color[2],
-            ),
+            )
+            .gamma_multiply(opacity),
         );
         if selected && self.tool == Tool::Select {
             for handle in object_resize_handles(object) {
@@ -538,12 +717,17 @@ impl RppApp {
                 self.world_to_screen(rect, start),
                 self.world_to_screen(rect, end),
             ],
-            Stroke::new((wall.thickness + 4.0) * self.zoom, CANVAS),
+            Stroke::new(
+                (wall.thickness + 4.0) * self.zoom,
+                self.canvas_fill()
+                    .gamma_multiply(self.plan.item_opacity(&window.id)),
+            ),
         );
         let color = if selected {
             ACCENT
         } else {
             Color32::from_rgb(window.color[0], window.color[1], window.color[2])
+                .gamma_multiply(self.plan.item_opacity(&window.id))
         };
         let offsets: &[f32] = if window.kind == WindowKind::Bay {
             &[-0.35, 0.0, 0.35]
@@ -583,14 +767,7 @@ impl RppApp {
             let b = self.world_to_screen(rect, Point::new(x, bottom_right.y));
             painter.line_segment(
                 [a, b],
-                Stroke::new(
-                    if major { 1.1 } else { 0.65 },
-                    if major {
-                        Color32::from_rgb(211, 215, 218)
-                    } else {
-                        Color32::from_rgb(236, 238, 237)
-                    },
-                ),
+                Stroke::new(if major { 1.1 } else { 0.65 }, self.grid_color(major)),
             );
         }
         for i in start_y..=end_y {
@@ -600,14 +777,7 @@ impl RppApp {
             let b = self.world_to_screen(rect, Point::new(bottom_right.x, y));
             painter.line_segment(
                 [a, b],
-                Stroke::new(
-                    if major { 1.1 } else { 0.65 },
-                    if major {
-                        Color32::from_rgb(211, 215, 218)
-                    } else {
-                        Color32::from_rgb(236, 238, 237)
-                    },
-                ),
+                Stroke::new(if major { 1.1 } else { 0.65 }, self.grid_color(major)),
             );
         }
     }
@@ -619,6 +789,7 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(wall.color[0], wall.color[1], wall.color[2])
+                .gamma_multiply(self.plan.item_opacity(&wall.id))
         };
         painter.line_segment([start, end], Stroke::new(wall.thickness * self.zoom, color));
 
@@ -669,6 +840,7 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(door.color[0], door.color[1], door.color[2])
+                .gamma_multiply(self.plan.item_opacity(&door.id))
         };
 
         painter.line_segment(
@@ -676,7 +848,11 @@ impl RppApp {
                 self.world_to_screen(rect, left),
                 self.world_to_screen(rect, right),
             ],
-            Stroke::new((wall.thickness + 4.0) * self.zoom, CANVAS),
+            Stroke::new(
+                (wall.thickness + 4.0) * self.zoom,
+                self.canvas_fill()
+                    .gamma_multiply(self.plan.item_opacity(&door.id)),
+            ),
         );
 
         if door.kind == DoorKind::Sliding {

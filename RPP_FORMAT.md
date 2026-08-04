@@ -1,17 +1,19 @@
 # RPP project container and RPP-PLAN specification
 
-This document describes the project format implemented by RPP 0.7.1.
-
-It covers two related formats:
+RPP 0.8.0 saves one project using two simple layers:
 
 1. **RPP project container** — the ZIP-compatible binary file carrying the
    `.rpp` extension;
 2. **RPP-PLAN** — the readable UTF-8 language stored as `plan.data` inside the
    container.
 
-RPP-PLAN is intentionally English-only. The application interface can be
-translated, but instructions such as `WALL`, `DOOR`, and `ARROW` never change.
-This guarantees that a project has one portable syntax.
+The outer file keeps images beside the plan. The inner language keeps the
+geometry readable. RPP-PLAN is always written in English: changing the
+interface language never turns `WALL` into a translated keyword.
+
+If you only want to write a small plan by hand, read sections 2, 3 and 9 first.
+The instruction reference in section 4 has the exact field order when you need
+it.
 
 ## 1. Project container
 
@@ -92,10 +94,10 @@ small and allows the same bundled symbol to be reused across projects. If the
 running application cannot resolve an image asset, it renders a neutral
 missing-image placeholder rather than substituting unrelated content.
 
-### 1.5 Not encryption
+### 1.5 Readable by design
 
-Changing the extension from `.zip` to `.rpp` does not encrypt or obfuscate the
-project. The format is deliberately readable and inspectable.
+The `.rpp` extension is a file association, not encryption. Rename a copy to
+`.zip` and you can inspect the whole project. That is intentional.
 
 ## 2. RPP-PLAN fundamentals
 
@@ -117,7 +119,7 @@ The first non-empty, non-comment instruction must be:
 RPP-PLAN 2
 ```
 
-The RPP-PLAN version is independent from the application version. RPP 0.7.1
+The RPP-PLAN version is independent from the application version. RPP 0.8.0
 writes version 2.
 
 The legacy header below is still accepted:
@@ -170,14 +172,17 @@ For ordinary instructions, `#` starts a comment:
 WALL north 0 0 400 0 20 exterior false 34383b # exterior wall
 ```
 
-`TEXT` lines are special because their JSON string may contain `#`:
+`TEXT` and `OBJECT_NAME` lines are special because their JSON string may
+contain `#`:
 
 ```text
 TEXT paint-note 100 50 12 0 false 34383b false "Paint #145ab4"
+OBJECT_NAME desk-1 "Desk #1"
 ```
 
-The complete remainder of a `TEXT` line must be valid JSON string content.
-Do not append a trailing `# comment` after a `TEXT` instruction.
+The complete remainder of these lines must be valid JSON string content.
+Do not append a trailing `# comment` after a `TEXT` or `OBJECT_NAME`
+instruction.
 
 Comments are accepted when reading handwritten files. RPP currently rewrites
 `plan.data` when saving and does **not** preserve original comments, blank-line
@@ -253,8 +258,8 @@ Free-form text is represented as a JSON string:
 "C:\\Plans\\house"
 ```
 
-This applies to `TEXT` content and `OBJECT_NAME`. Standard JSON escaping rules
-must be used.
+This applies to `TEXT`, `OBJECT_NAME`, `ROOM_NAME`, and layer names. Standard
+JSON escaping rules must be used.
 
 ## 3. Complete example
 
@@ -278,6 +283,11 @@ OBJECT_NAME dining-table "Family table"
 
 TEXT room-label 200 120 18 0 false 34383b true "Living room"
 AREA floor-zone false d6e6d2 466e46 0 0 400 0 400 300 0 300
+ROOM living-room automatic living-room false true dce6ef 0 0 400 0 400 300 0 300
+ROOM_NAME living-room "Living room"
+LAYER default true false 1 "Default"
+LAYER furniture true false 0.85 "Furniture"
+ASSIGN dining-table furniture
 COMPASS north-indicator 460 70 80 0 false 34383b
 ARROW evacuation 80 80 120 24 solid 0 false 169c35
 
@@ -573,7 +583,67 @@ AREA room-fill false d6e6d2 466e46 0 0 400 0 400 300 0 300
 RPP calculates the surface using the shoelace formula and displays it in the
 selected interface unit.
 
-### 4.9 `COMPASS`
+### 4.9 `ROOM` and `ROOM_NAME`
+
+Room geometry uses:
+
+```text
+ROOM <id> <source> <type> <locked> <fill-visible> <fill-color> <x1> <y1> <x2> <y2> <x3> <y3> [...]
+```
+
+`source` is `automatic` or `manual`. Automatic rooms are detected from the
+bounded faces of the wall graph. Their stored polygon is refreshed when wall
+geometry changes. Manual rooms are user-defined polygons and do not require a
+closed wall contour.
+
+Supported room types are:
+
+```text
+custom living-room bedroom kitchen bathroom hallway office garage storage
+```
+
+The optional display name is a separate JSON string:
+
+```text
+ROOM_NAME <room-id> <JSON string>
+```
+
+Example:
+
+```text
+ROOM room-1 manual office false true dce6ef 0 0 400 0 400 300 0 300
+ROOM_NAME room-1 "Studio #1"
+```
+
+Surface and perimeter are derived from the polygon and are not stored as
+separate numbers.
+
+### 4.10 `LAYER` and `ASSIGN`
+
+Syntax:
+
+```text
+LAYER <id> <visible> <locked> <opacity> <JSON name>
+ASSIGN <item-id> <layer-id>
+```
+
+Opacity is from `0` to `1`. Layers are drawn in file order: the first is at the
+bottom and the last is at the top. A locked layer prevents its items from being
+selected or moved. A hidden layer is omitted from the editor and exports.
+
+Items without an `ASSIGN` instruction belong to the built-in `default` layer.
+Each item may have at most one assignment. Deleting a layer in the application
+moves its items back to the default layer.
+
+Example:
+
+```text
+LAYER default true false 1 "Default"
+LAYER furniture true false 0.8 "Furniture"
+ASSIGN table-1 furniture
+```
+
+### 4.11 `COMPASS`
 
 Syntax:
 
@@ -590,7 +660,7 @@ Example:
 COMPASS north-indicator 460 70 80 15 false 34383b
 ```
 
-### 4.10 `ARROW`
+### 4.12 `ARROW`
 
 Syntax:
 
@@ -635,7 +705,7 @@ ARROW north-west 200 200 80 16 solid 40 false 145ab4
 
 Arrows are procedural vector geometry. No arrow image is embedded.
 
-### 4.11 `ASSET`
+### 4.13 `ASSET`
 
 Syntax:
 
@@ -673,7 +743,7 @@ The bytes must describe a supported, non-empty image and must agree with a
 decodable image format. RPP validates the data rather than trusting only the
 extension.
 
-### 4.12 `IMAGE`
+### 4.14 `IMAGE`
 
 Syntax:
 
@@ -708,8 +778,8 @@ Most relationships are validated after the complete file is parsed:
 - doors and windows may reference a wall declared elsewhere in the file;
 - image instances may reference an asset declared elsewhere in the file.
 
-`OBJECT_NAME` is the exception: its referenced object must already have been
-declared because the name is applied immediately while parsing.
+`OBJECT_NAME` and `ROOM_NAME` are exceptions: their referenced item must already
+have been declared because the name is applied immediately while parsing.
 
 For readability, the writer uses this order:
 
@@ -722,8 +792,11 @@ For readability, the writer uses this order:
 7. image instances;
 8. text;
 9. areas;
-10. compass roses;
-11. arrows.
+10. rooms and their names;
+11. layers;
+12. layer assignments;
+13. compass roses;
+14. arrows.
 
 Handwritten files do not otherwise need to preserve this order.
 
@@ -747,6 +820,8 @@ The validator rejects, among other conditions:
 - references to missing walls or assets;
 - invalid or empty image data;
 - degenerate areas;
+- degenerate rooms or invalid room types;
+- missing layers, duplicate layer assignments, or opacity outside `0..1`;
 - arrow orientation outside `0..63`;
 - values exceeding implementation limits.
 
@@ -754,7 +829,7 @@ Text syntax errors include a one-based line number.
 
 ## 7. Security and complexity limits
 
-RPP 0.7.1 applies these limits:
+RPP 0.8.0 applies these limits:
 
 | Resource | Limit |
 |---|---:|
@@ -768,6 +843,9 @@ RPP 0.7.1 applies these limits:
 | Image decoder allocation | 256 MiB |
 | Items of each plan type | 100,000 |
 | Points in one area | 10,000 |
+| Points in one room | 10,000 |
+| Layers | 1,000 |
+| Layer assignments | 500,000 |
 | Identifier length | 128 bytes |
 | Object name | 512 bytes |
 | Text content | 10,000 bytes |
@@ -782,7 +860,7 @@ arbitrary stored paths, preventing path traversal during normal loading.
 
 ## 8. Compatibility and migration
 
-RPP 0.7.1 can open:
+RPP 0.8.0 can open:
 
 - packaged `.rpp` ZIP containers containing `RPP-PLAN 2`;
 - standalone readable `RPP-PLAN 2` text;
@@ -807,6 +885,9 @@ backup. The application normally creates a sibling `.rpp.bak` file before
 replacing an existing project.
 
 ## 9. Writing a project by hand
+
+You do not need RPP to generate a valid project. A text editor is enough for a
+plan without imported images, and a normal ZIP tool handles the rest.
 
 ### 9.1 Text-only plan
 
@@ -845,7 +926,7 @@ incorrect:
 project.rpp/my-project/plan.data
 ```
 
-### 9.3 Debugging a rejected file
+### 9.3 When RPP rejects the file
 
 If RPP reports a syntax line:
 
@@ -863,7 +944,8 @@ bytes, and file-size limits.
 
 ## 10. Format evolution rules
 
-Future RPP-PLAN changes should follow these rules:
+The format is still young, but changing it casually would make handwritten
+plans miserable to maintain. Future changes therefore follow these rules:
 
 - increment the RPP-PLAN header version only for a real grammar or semantic
   change;

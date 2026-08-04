@@ -5,6 +5,7 @@ mod export;
 mod format;
 mod localization;
 mod model;
+mod room_detection;
 
 use app::RppApp;
 use eframe::egui;

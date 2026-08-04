@@ -1,5 +1,19 @@
 use super::*;
 
+fn room_kind_key(kind: RoomKind) -> &'static str {
+    match kind {
+        RoomKind::Custom => "room.type_custom",
+        RoomKind::LivingRoom => "room.type_living_room",
+        RoomKind::Bedroom => "room.type_bedroom",
+        RoomKind::Kitchen => "room.type_kitchen",
+        RoomKind::Bathroom => "room.type_bathroom",
+        RoomKind::Hallway => "room.type_hallway",
+        RoomKind::Office => "room.type_office",
+        RoomKind::Garage => "room.type_garage",
+        RoomKind::Storage => "room.type_storage",
+    }
+}
+
 impl RppApp {
     pub(super) fn inspector(&mut self, root: &mut Ui) {
         Panel::right("inspector")
@@ -39,7 +53,53 @@ impl RppApp {
                             self.set_selected_locked(false);
                         }
                     });
+                    ui.add_space(6.0);
+                    ui.label(self.localizer.text("panel.align"));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button(self.localizer.text("action.align_left"))
+                            .clicked()
+                        {
+                            self.align_selected(Alignment::Left);
+                        }
+                        if ui
+                            .small_button(self.localizer.text("action.align_center"))
+                            .clicked()
+                        {
+                            self.align_selected(Alignment::HorizontalCenter);
+                        }
+                        if ui
+                            .small_button(self.localizer.text("action.align_right"))
+                            .clicked()
+                        {
+                            self.align_selected(Alignment::Right);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button(self.localizer.text("action.align_top"))
+                            .clicked()
+                        {
+                            self.align_selected(Alignment::Top);
+                        }
+                        if ui
+                            .small_button(self.localizer.text("action.align_middle"))
+                            .clicked()
+                        {
+                            self.align_selected(Alignment::VerticalCenter);
+                        }
+                        if ui
+                            .small_button(self.localizer.text("action.align_bottom"))
+                            .clicked()
+                        {
+                            self.align_selected(Alignment::Bottom);
+                        }
+                    });
                     ui.add_space(8.0);
+                }
+
+                if self.selection.is_some() && self.additional_selections.is_empty() {
+                    self.selected_layer_selector(ui);
                 }
 
                 match self.selection.clone() {
@@ -51,6 +111,7 @@ impl RppApp {
                     Some(Selection::Window(id)) => self.window_inspector(ui, &id),
                     Some(Selection::Object(id)) => self.object_inspector(ui, &id),
                     Some(Selection::Area(id)) => self.area_inspector(ui, &id),
+                    Some(Selection::Room(id)) => self.room_inspector(ui, &id),
                     Some(Selection::Compass(id)) => self.compass_inspector(ui, &id),
                     Some(Selection::Arrow(id)) => self.arrow_inspector(ui, &id),
                     None => {
@@ -162,7 +223,7 @@ impl RppApp {
                                 ui.label(
                                     egui::RichText::new("40 × 40 cm · built-in")
                                         .size(10.0)
-                                        .color(Color32::from_gray(115)),
+                                        .color(self.muted_text_color()),
                                 );
                                 if ui
                                     .small_button(self.localizer.text("action.place_image"))
@@ -218,7 +279,7 @@ impl RppApp {
                                             placed_height
                                         ))
                                         .size(9.5)
-                                        .color(Color32::from_gray(115)),
+                                        .color(self.muted_text_color()),
                                     );
                                     ui.horizontal(|ui| {
                                         if ui
@@ -250,17 +311,17 @@ impl RppApp {
                     ui.label(
                         egui::RichText::new(self.localizer.text("hint.undo"))
                             .size(11.0)
-                            .color(Color32::from_gray(110)),
+                            .color(self.muted_text_color()),
                     );
                     ui.label(
                         egui::RichText::new(self.localizer.text("hint.pan"))
                             .size(11.0)
-                            .color(Color32::from_gray(110)),
+                            .color(self.muted_text_color()),
                     );
                     ui.label(
                         egui::RichText::new(self.localizer.text("hint.zoom"))
                             .size(11.0)
-                            .color(Color32::from_gray(110)),
+                            .color(self.muted_text_color()),
                     );
                     ui.label(
                         egui::RichText::new(self.localizer.text("panel.navigation"))
@@ -479,6 +540,123 @@ impl RppApp {
             .clicked()
         {
             self.remove_selected();
+        }
+    }
+
+    fn room_inspector(&mut self, ui: &mut Ui, id: &str) {
+        let Some(index) = self.plan.rooms.iter().position(|room| room.id == id) else {
+            return;
+        };
+        ui.label(
+            egui::RichText::new(self.localizer.text("selection.room"))
+                .size(12.0)
+                .color(ACCENT),
+        );
+        let source_key = match self.plan.rooms[index].source {
+            RoomSource::Automatic => "room.source_automatic",
+            RoomSource::Manual => "room.source_manual",
+        };
+        property_row(ui, &self.localizer.text("property.source"), |ui| {
+            ui.label(self.localizer.text(source_key))
+        });
+
+        let mut name = self.plan.rooms[index].name.clone();
+        if property_row(ui, &self.localizer.text("property.name"), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut name).desired_width(120.0))
+        })
+        .changed()
+        {
+            let before = self.snapshot();
+            self.plan.rooms[index].name = name;
+            self.commit(before);
+        }
+
+        let mut kind = self.plan.rooms[index].kind;
+        property_row(ui, &self.localizer.text("property.type"), |ui| {
+            egui::ComboBox::from_id_salt("room-kind")
+                .selected_text(self.localizer.text(room_kind_key(kind)))
+                .show_ui(ui, |ui| {
+                    for value in [
+                        RoomKind::Custom,
+                        RoomKind::LivingRoom,
+                        RoomKind::Bedroom,
+                        RoomKind::Kitchen,
+                        RoomKind::Bathroom,
+                        RoomKind::Hallway,
+                        RoomKind::Office,
+                        RoomKind::Garage,
+                        RoomKind::Storage,
+                    ] {
+                        ui.selectable_value(
+                            &mut kind,
+                            value,
+                            self.localizer.text(room_kind_key(value)),
+                        );
+                    }
+                })
+                .response
+        });
+        if kind != self.plan.rooms[index].kind {
+            let before = self.snapshot();
+            self.plan.rooms[index].kind = kind;
+            self.commit(before);
+        }
+
+        property_row(ui, &self.localizer.text("property.area"), |ui| {
+            ui.label(format_area(
+                self.plan.rooms[index].area_square_centimeters(),
+                self.unit,
+            ))
+        });
+        property_row(ui, &self.localizer.text("property.perimeter"), |ui| {
+            ui.label(format_distance(
+                self.plan.rooms[index].perimeter_centimeters(),
+                self.unit,
+            ))
+        });
+
+        let mut fill = self.plan.rooms[index].fill_color;
+        if property_row(ui, &self.localizer.text("property.fill_color"), |ui| {
+            ui.color_edit_button_srgb(&mut fill)
+        })
+        .changed()
+        {
+            let before = self.snapshot();
+            self.plan.rooms[index].fill_color = fill;
+            self.commit(before);
+        }
+        let mut visible = self.plan.rooms[index].fill_visible;
+        if property_row(ui, &self.localizer.text("property.fill_visible"), |ui| {
+            ui.checkbox(&mut visible, "")
+        })
+        .changed()
+        {
+            let before = self.snapshot();
+            self.plan.rooms[index].fill_visible = visible;
+            self.commit(before);
+        }
+        let mut locked = self.plan.rooms[index].locked;
+        if property_row(ui, &self.localizer.text("property.locked"), |ui| {
+            ui.checkbox(&mut locked, "")
+        })
+        .changed()
+        {
+            let before = self.snapshot();
+            self.plan.rooms[index].locked = locked;
+            self.commit(before);
+        }
+        if self.plan.rooms[index].source == RoomSource::Manual
+            && ui
+                .button(self.localizer.text("action.delete_room"))
+                .clicked()
+        {
+            let before = self.snapshot();
+            let room_id = self.plan.rooms[index].id.clone();
+            self.plan.rooms.remove(index);
+            self.plan.remove_layer_assignment(&room_id);
+            self.selection = None;
+            self.commit(before);
+            self.status = self.localizer.text("status.room_deleted");
         }
     }
 
@@ -1346,7 +1524,7 @@ impl RppApp {
             ui.label(
                 egui::RichText::new(&asset.name)
                     .size(11.0)
-                    .color(Color32::from_gray(105)),
+                    .color(self.muted_text_color()),
             );
         }
         ui.add_space(10.0);

@@ -1,5 +1,7 @@
 mod inspectors;
+mod layers;
 mod render;
+mod rooms;
 
 use std::{
     collections::HashMap,
@@ -27,12 +29,13 @@ use crate::{
     format::{FormatError, decode_plan, encode_project},
     localization::Localizer,
     model::{
-        AreaShape, ArrowStyle, CompassRose, Door, DoorKind, HingeSide, ImageObject, ObjectKind,
-        PlanArrow, PlanFile, PlanLine, PlanObject, Point, ProjectAsset, Snapshot, SwingSide,
-        TextObject, Wall, WallKind, Window, WindowKind, default_area_fill_color,
-        default_area_stroke_color, default_arrow_color, default_compass_color, default_line_color,
-        default_object_fill_color, default_object_stroke_color, default_opening_color,
-        default_text_color, default_wall_color, default_wall_thickness, default_window_color,
+        AreaShape, ArrowStyle, CompassRose, DEFAULT_LAYER_ID, Door, DoorKind, HingeSide,
+        ImageObject, Layer, ObjectKind, PlanArrow, PlanFile, PlanLine, PlanObject, Point,
+        ProjectAsset, Room, RoomKind, RoomSource, Snapshot, SwingSide, TextObject, Wall, WallKind,
+        Window, WindowKind, default_area_fill_color, default_area_stroke_color,
+        default_arrow_color, default_compass_color, default_line_color, default_object_fill_color,
+        default_object_stroke_color, default_opening_color, default_text_color, default_wall_color,
+        default_wall_thickness, default_window_color,
     },
 };
 
@@ -98,6 +101,7 @@ enum Tool {
     Window,
     Object,
     Area,
+    Room,
     Compass,
     Arrow,
 }
@@ -114,6 +118,7 @@ impl Tool {
             Self::Window => "tool.window_instruction",
             Self::Object => "tool.object_instruction",
             Self::Area => "tool.area_instruction",
+            Self::Room => "tool.room_instruction",
             Self::Compass => "tool.compass_instruction",
             Self::Arrow => "tool.arrow_instruction",
         }
@@ -130,8 +135,19 @@ enum Selection {
     Window(String),
     Object(String),
     Area(String),
+    Room(String),
     Compass(String),
     Arrow(String),
+}
+
+#[derive(Clone, Copy)]
+enum Alignment {
+    Left,
+    HorizontalCenter,
+    Right,
+    Top,
+    VerticalCenter,
+    Bottom,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,62 +284,68 @@ fn selectable_selections(plan: &PlanFile) -> Vec<Selection> {
     selections.extend(
         plan.walls
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Wall(item.id.clone())),
     );
     selections.extend(
         plan.lines
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Line(item.id.clone())),
     );
     selections.extend(
         plan.texts
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Text(item.id.clone())),
     );
     selections.extend(
         plan.doors
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Door(item.id.clone())),
     );
     selections.extend(
         plan.images
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Image(item.id.clone())),
     );
     selections.extend(
         plan.windows
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Window(item.id.clone())),
     );
     selections.extend(
         plan.objects
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Object(item.id.clone())),
     );
     selections.extend(
         plan.areas
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Area(item.id.clone())),
     );
     selections.extend(
         plan.compasses
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Compass(item.id.clone())),
     );
     selections.extend(
         plan.arrows
             .iter()
-            .filter(|item| !item.locked)
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
             .map(|item| Selection::Arrow(item.id.clone())),
+    );
+    selections.extend(
+        plan.rooms
+            .iter()
+            .filter(|item| !item.locked && plan.item_editable(&item.id))
+            .map(|item| Selection::Room(item.id.clone())),
     );
     selections
 }
@@ -421,6 +443,14 @@ struct AreaDrag {
 }
 
 #[derive(Clone)]
+struct RoomDrag {
+    room_id: String,
+    pointer_start: Point,
+    original: Room,
+    before: Snapshot,
+}
+
+#[derive(Clone)]
 struct CompassDrag {
     compass_id: String,
     pointer_start: Point,
@@ -449,7 +479,9 @@ pub struct RppApp {
     line_draft: Option<DraftWall>,
     measurement: Option<DraftWall>,
     arrow_draft: Option<DraftWall>,
+    selection_box: Option<DraftWall>,
     area_draft: Vec<Point>,
+    room_draft: Vec<Point>,
     wall_press_origin: Option<Point>,
     wall_press_created_draft: bool,
     wall_drag: Option<WallDrag>,
@@ -461,6 +493,7 @@ pub struct RppApp {
     object_drag: Option<ObjectDrag>,
     arrow_drag: Option<ArrowDrag>,
     area_drag: Option<AreaDrag>,
+    room_drag: Option<RoomDrag>,
     compass_drag: Option<CompassDrag>,
     group_drag: Option<GroupDrag>,
     past: Vec<Snapshot>,
@@ -488,6 +521,8 @@ pub struct RppApp {
     default_area_fill_color: [u8; 3],
     image_limit_index: u8,
     settings_open: bool,
+    layers_open: bool,
+    active_layer_id: String,
     theme: AppTheme,
 }
 
@@ -513,6 +548,33 @@ impl RppApp {
             AppTheme::Light => CANVAS,
             AppTheme::Dark => Color32::from_rgb(25, 26, 27),
             AppTheme::WarmDark => Color32::from_rgb(33, 32, 29),
+        }
+    }
+
+    fn grid_color(&self, major: bool) -> Color32 {
+        match (self.theme, major) {
+            (AppTheme::Light, true) => Color32::from_rgb(211, 215, 218),
+            (AppTheme::Light, false) => Color32::from_rgb(236, 238, 237),
+            (AppTheme::Dark, true) => Color32::from_rgb(58, 61, 63),
+            (AppTheme::Dark, false) => Color32::from_rgb(42, 44, 46),
+            (AppTheme::WarmDark, true) => Color32::from_rgb(65, 62, 55),
+            (AppTheme::WarmDark, false) => Color32::from_rgb(48, 46, 41),
+        }
+    }
+
+    fn muted_text_color(&self) -> Color32 {
+        match self.theme {
+            AppTheme::Light => Color32::from_gray(105),
+            AppTheme::Dark => Color32::from_gray(175),
+            AppTheme::WarmDark => Color32::from_rgb(190, 184, 169),
+        }
+    }
+
+    fn subtle_text_color(&self) -> Color32 {
+        match self.theme {
+            AppTheme::Light => Color32::from_gray(135),
+            AppTheme::Dark => Color32::from_gray(145),
+            AppTheme::WarmDark => Color32::from_rgb(155, 150, 138),
         }
     }
 
@@ -551,7 +613,9 @@ impl RppApp {
             line_draft: None,
             measurement: None,
             arrow_draft: None,
+            selection_box: None,
             area_draft: Vec::new(),
+            room_draft: Vec::new(),
             wall_press_origin: None,
             wall_press_created_draft: false,
             wall_drag: None,
@@ -563,6 +627,7 @@ impl RppApp {
             object_drag: None,
             arrow_drag: None,
             area_drag: None,
+            room_drag: None,
             compass_drag: None,
             group_drag: None,
             past: Vec::new(),
@@ -590,6 +655,8 @@ impl RppApp {
             default_area_fill_color: settings.area_fill_color,
             image_limit_index: settings.image_limit_index.min(10),
             settings_open: false,
+            layers_open: false,
+            active_layer_id: DEFAULT_LAYER_ID.to_owned(),
             theme: settings.theme,
         };
 
@@ -600,6 +667,7 @@ impl RppApp {
         {
             app.plan = decoded.plan;
             app.assets = Arc::new(decoded.assets);
+            app.refresh_automatic_rooms();
             app.rebuild_textures(&cc.egui_ctx);
             app.status = app.localizer.text("app.restored");
         }
@@ -664,6 +732,11 @@ impl RppApp {
                         item.locked = locked;
                     }
                 }
+                Selection::Room(id) => {
+                    if let Some(item) = self.plan.rooms.iter_mut().find(|item| item.id == id) {
+                        item.locked = locked;
+                    }
+                }
                 Selection::Compass(id) => {
                     if let Some(item) = self.plan.compasses.iter_mut().find(|item| item.id == id) {
                         item.locked = locked;
@@ -725,6 +798,12 @@ impl RppApp {
                     .iter_mut()
                     .find(|item| item.id == id)
                     .map(|item| item.stroke_color = color),
+                Selection::Room(id) => self
+                    .plan
+                    .rooms
+                    .iter_mut()
+                    .find(|item| item.id == id)
+                    .map(|item| item.fill_color = color),
                 Selection::Compass(id) => self
                     .plan
                     .compasses
@@ -741,6 +820,68 @@ impl RppApp {
             };
         }
         self.commit(before);
+    }
+
+    fn align_selected(&mut self, alignment: Alignment) {
+        let selections = self.selected_items();
+        if selections.len() < 2 {
+            return;
+        }
+        let bounds = selections
+            .iter()
+            .filter_map(|selection| selection_bounds(&self.plan, selection))
+            .collect::<Vec<_>>();
+        if bounds.len() < 2 {
+            return;
+        }
+        let group_minimum = Point::new(
+            bounds
+                .iter()
+                .map(|(minimum, _)| minimum.x)
+                .fold(f32::INFINITY, f32::min),
+            bounds
+                .iter()
+                .map(|(minimum, _)| minimum.y)
+                .fold(f32::INFINITY, f32::min),
+        );
+        let group_maximum = Point::new(
+            bounds
+                .iter()
+                .map(|(_, maximum)| maximum.x)
+                .fold(f32::NEG_INFINITY, f32::max),
+            bounds
+                .iter()
+                .map(|(_, maximum)| maximum.y)
+                .fold(f32::NEG_INFINITY, f32::max),
+        );
+        let before = self.snapshot();
+        let movable = selections
+            .iter()
+            .filter(|selection| !opening_follows_selected_wall(&self.plan, selection, &selections))
+            .cloned()
+            .collect::<Vec<_>>();
+        for selection in &movable {
+            let Some((minimum, maximum)) = selection_bounds(&self.plan, selection) else {
+                continue;
+            };
+            let delta = match alignment {
+                Alignment::Left => Point::new(group_minimum.x - minimum.x, 0.0),
+                Alignment::HorizontalCenter => Point::new(
+                    (group_minimum.x + group_maximum.x - minimum.x - maximum.x) * 0.5,
+                    0.0,
+                ),
+                Alignment::Right => Point::new(group_maximum.x - maximum.x, 0.0),
+                Alignment::Top => Point::new(0.0, group_minimum.y - minimum.y),
+                Alignment::VerticalCenter => Point::new(
+                    0.0,
+                    (group_minimum.y + group_maximum.y - minimum.y - maximum.y) * 0.5,
+                ),
+                Alignment::Bottom => Point::new(0.0, group_maximum.y - maximum.y),
+            };
+            self.translate_selection(selection, delta);
+        }
+        self.commit(before);
+        self.status = self.localizer.text("status.items_aligned");
     }
 
     fn persist_settings(&self) {
@@ -822,6 +963,14 @@ impl RppApp {
             .unwrap_or(grid)
     }
 
+    fn magnet_wall_endpoint(&self, point: Point) -> Point {
+        magnet_to_wall(&self.plan.walls, point, 12.0 / self.zoom)
+    }
+
+    fn wall_snap_point(&self, point: Point) -> Point {
+        self.magnet_wall_endpoint(self.snap_point(point))
+    }
+
     fn snap_with_axis(&self, point: Point, start: Point, axis_lock: bool) -> Point {
         let mut point = self.snap_point(point);
         if axis_lock {
@@ -865,7 +1014,14 @@ impl RppApp {
                 selections.insert(0, selection);
             }
             self.additional_selections.clear();
-            for selection in selections {
+            for selection in selections
+                .iter()
+                .filter(|selection| {
+                    !opening_follows_selected_wall(&self.plan, selection, &selections)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+            {
                 self.selection = Some(selection);
                 self.nudge_selected(delta);
             }
@@ -950,6 +1106,19 @@ impl RppApp {
                         return;
                     }
                     for point in &mut area.points {
+                        point.x += delta.x;
+                        point.y += delta.y;
+                    }
+                    moved = true;
+                }
+            }
+            Selection::Room(id) => {
+                if let Some(room) = self.plan.rooms.iter_mut().find(|room| room.id == id) {
+                    if room.locked || room.source == RoomSource::Automatic {
+                        self.status = self.localizer.text("status.room_locked");
+                        return;
+                    }
+                    for point in &mut room.points {
                         point.x += delta.x;
                         point.y += delta.y;
                     }
@@ -1147,6 +1316,9 @@ impl RppApp {
     }
 
     fn commit(&mut self, before: Snapshot) {
+        if before.walls != self.plan.walls {
+            self.refresh_automatic_rooms();
+        }
         let after = self.snapshot();
         if before != after {
             self.past.push(before);
@@ -1244,6 +1416,7 @@ impl RppApp {
 
     fn new_plan(&mut self) {
         self.plan = PlanFile::default();
+        self.active_layer_id = DEFAULT_LAYER_ID.to_owned();
         self.assets = Arc::new(Vec::new());
         self.textures.clear();
         self.selection = None;
@@ -1334,6 +1507,8 @@ impl RppApp {
                 Ok(decoded) => {
                     let needs_conversion = decoded.needs_conversion;
                     self.plan = decoded.plan;
+                    self.refresh_automatic_rooms();
+                    self.active_layer_id = DEFAULT_LAYER_ID.to_owned();
                     self.assets = Arc::new(decoded.assets);
                     let context = self.context.clone();
                     self.rebuild_textures(&context);
@@ -1414,6 +1589,7 @@ impl RppApp {
             && self.plan.areas.is_empty()
             && self.plan.compasses.is_empty()
             && self.plan.arrows.is_empty()
+            && self.plan.rooms.is_empty()
         {
             self.status = self.localizer.text("status.nothing_to_export");
             return;
@@ -1454,6 +1630,7 @@ impl RppApp {
             && self.plan.areas.is_empty()
             && self.plan.compasses.is_empty()
             && self.plan.arrows.is_empty()
+            && self.plan.rooms.is_empty()
         {
             self.status = self.localizer.text("status.nothing_to_export");
             return;
@@ -1630,6 +1807,7 @@ impl RppApp {
         };
         let id = image.id.clone();
         self.plan.images.push(image);
+        self.assign_to_active_layer(&id);
         self.selection = Some(Selection::Image(id));
     }
 
@@ -1702,6 +1880,17 @@ impl RppApp {
                     self.plan.areas.retain(|area| area.id != id);
                     self.status = self.localizer.text("status.area_deleted");
                 }
+                Selection::Room(id) => {
+                    if self
+                        .plan
+                        .rooms
+                        .iter()
+                        .any(|room| room.id == id && room.source == RoomSource::Manual)
+                    {
+                        self.plan.rooms.retain(|room| room.id != id);
+                        self.status = self.localizer.text("status.room_deleted");
+                    }
+                }
                 Selection::Compass(id) => {
                     self.plan.compasses.retain(|compass| compass.id != id);
                     self.status = self.localizer.text("status.compass_deleted");
@@ -1712,6 +1901,27 @@ impl RppApp {
                 }
             }
         }
+        self.refresh_automatic_rooms();
+        let existing_ids = self
+            .plan
+            .walls
+            .iter()
+            .map(|item| item.id.as_str())
+            .chain(self.plan.lines.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.doors.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.windows.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.objects.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.images.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.texts.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.areas.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.rooms.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.compasses.iter().map(|item| item.id.as_str()))
+            .chain(self.plan.arrows.iter().map(|item| item.id.as_str()))
+            .map(str::to_owned)
+            .collect::<std::collections::HashSet<_>>();
+        self.plan
+            .layer_assignments
+            .retain(|assignment| existing_ids.contains(&assignment.item_id));
         if removed_count > 1 {
             self.status = self.localizer.format(
                 "status.items_deleted",
@@ -1764,6 +1974,8 @@ impl RppApp {
                 wall.y2 += GRID;
                 let new_id = wall.id.clone();
                 self.plan.walls.push(wall);
+                self.assign_to_active_layer(&new_id);
+                self.refresh_automatic_rooms();
                 self.selection = Some(Selection::Wall(new_id));
                 self.status = self.localizer.text("status.wall_duplicated");
             }
@@ -1779,6 +1991,7 @@ impl RppApp {
                 line.y2 += self.grid_size;
                 let new_id = line.id.clone();
                 self.plan.lines.push(line);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Line(new_id));
                 self.status = self.localizer.text("status.line_duplicated");
             }
@@ -1792,6 +2005,7 @@ impl RppApp {
                 text.y += self.grid_size;
                 let new_id = text.id.clone();
                 self.plan.texts.push(text);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Text(new_id));
                 self.status = self.localizer.text("status.text_duplicated");
             }
@@ -1810,6 +2024,7 @@ impl RppApp {
                 door.t = position;
                 let new_id = door.id.clone();
                 self.plan.doors.push(door);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Door(new_id));
                 self.status = self.localizer.text("status.door_duplicated");
             }
@@ -1828,6 +2043,7 @@ impl RppApp {
                 image.y += GRID;
                 let new_id = image.id.clone();
                 self.plan.images.push(image);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Image(new_id));
                 self.status = self.localizer.text("status.image_duplicated");
             }
@@ -1851,6 +2067,7 @@ impl RppApp {
                 window.t = position;
                 let new_id = window.id.clone();
                 self.plan.windows.push(window);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Window(new_id));
                 self.status = self.localizer.text("status.window_duplicated");
             }
@@ -1869,6 +2086,7 @@ impl RppApp {
                 object.y += GRID;
                 let new_id = object.id.clone();
                 self.plan.objects.push(object);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Object(new_id));
                 self.status = self.localizer.text("status.object_duplicated");
             }
@@ -1884,8 +2102,26 @@ impl RppApp {
                 }
                 let new_id = area.id.clone();
                 self.plan.areas.push(area);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Area(new_id));
                 self.status = self.localizer.text("status.area_duplicated");
+            }
+            Selection::Room(id) => {
+                let Some(mut room) = self.plan.rooms.iter().find(|room| room.id == id).cloned()
+                else {
+                    return;
+                };
+                room.id = make_id("room");
+                room.source = RoomSource::Manual;
+                for point in &mut room.points {
+                    point.x += self.grid_size;
+                    point.y += self.grid_size;
+                }
+                let new_id = room.id.clone();
+                self.plan.rooms.push(room);
+                self.assign_to_active_layer(&new_id);
+                self.selection = Some(Selection::Room(new_id));
+                self.status = self.localizer.text("status.room_duplicated");
             }
             Selection::Compass(id) => {
                 let Some(mut compass) = self
@@ -1902,6 +2138,7 @@ impl RppApp {
                 compass.y += self.grid_size;
                 let new_id = compass.id.clone();
                 self.plan.compasses.push(compass);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Compass(new_id));
                 self.status = self.localizer.text("status.compass_duplicated");
             }
@@ -1920,6 +2157,7 @@ impl RppApp {
                 arrow.y += self.grid_size;
                 let new_id = arrow.id.clone();
                 self.plan.arrows.push(arrow);
+                self.assign_to_active_layer(&new_id);
                 self.selection = Some(Selection::Arrow(new_id));
                 self.status = self.localizer.text("status.arrow_duplicated");
             }
@@ -1961,6 +2199,7 @@ impl RppApp {
             return;
         }
         let before = self.snapshot();
+        let original_layer_id = self.plan.layer_id_for(&original.id).to_owned();
         let middle = original.point_at(0.5);
         let mut second = original.clone();
         second.id = make_id("wall");
@@ -1994,6 +2233,7 @@ impl RppApp {
 
         let second_id = second.id.clone();
         self.plan.walls.push(second);
+        self.plan.assign_to_layer(&second_id, &original_layer_id);
         self.selection = Some(Selection::Wall(second_id));
         self.status = self.localizer.text("status.wall_split");
         self.commit(before);
@@ -2020,6 +2260,7 @@ impl RppApp {
         let editing_text = ctx.egui_wants_keyboard_input();
         let (
             save,
+            save_as,
             undo,
             redo,
             select_all,
@@ -2035,11 +2276,16 @@ impl RppApp {
             window,
             object,
             area,
+            room,
             compass,
             arrow,
         ) = ctx.input_mut(|input| {
             (
                 input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::S)),
+                input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    Modifiers::CTRL | Modifiers::SHIFT,
+                    Key::S,
+                )),
                 input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::Z)),
                 input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::Y))
                     || input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -2061,6 +2307,7 @@ impl RppApp {
                 input.key_pressed(Key::F),
                 input.key_pressed(Key::O),
                 input.key_pressed(Key::A),
+                input.key_pressed(Key::B),
                 input.key_pressed(Key::N),
                 input.key_pressed(Key::Y),
             )
@@ -2068,6 +2315,9 @@ impl RppApp {
 
         if save {
             self.save_plan();
+        }
+        if save_as {
+            self.save_plan_as();
         }
         if undo {
             self.undo();
@@ -2112,6 +2362,9 @@ impl RppApp {
             if area {
                 self.tool = Tool::Area;
             }
+            if room {
+                self.tool = Tool::Room;
+            }
             if compass {
                 self.tool = Tool::Compass;
             }
@@ -2148,12 +2401,15 @@ impl RppApp {
             self.draft = None;
             self.line_draft = None;
             self.measurement = None;
+            self.selection_box = None;
             self.area_draft.clear();
+            self.room_draft.clear();
             self.wall_press_origin = None;
             self.wall_drag = None;
             self.line_drag = None;
             self.text_drag = None;
             self.area_drag = None;
+            self.room_drag = None;
             self.compass_drag = None;
             self.door_drag = None;
             self.window_drag = None;
@@ -2178,12 +2434,12 @@ impl RppApp {
                     ui.label(
                         egui::RichText::new("Ran Plan Plan")
                             .size(12.0)
-                            .color(Color32::from_gray(105)),
+                            .color(self.muted_text_color()),
                     );
                     ui.label(
-                        egui::RichText::new("0.7.1")
+                        egui::RichText::new("0.8.0")
                             .size(10.0)
-                            .color(Color32::from_gray(135)),
+                            .color(self.subtle_text_color()),
                     );
                     ui.add_space(24.0);
 
@@ -2269,6 +2525,9 @@ impl RppApp {
                     }
                     if flat_button(ui, &self.localizer.text("action.settings")).clicked() {
                         self.settings_open = true;
+                    }
+                    if flat_button(ui, &self.localizer.text("action.layers")).clicked() {
+                        self.layers_open = true;
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2528,6 +2787,13 @@ impl RppApp {
                 tool_button(
                     ui,
                     &mut self.tool,
+                    Tool::Room,
+                    &self.localizer.text("tool.room"),
+                    "B",
+                );
+                tool_button(
+                    ui,
+                    &mut self.tool,
                     Tool::Compass,
                     &self.localizer.text("tool.compass"),
                     "N",
@@ -2545,6 +2811,7 @@ impl RppApp {
                     self.measurement = None;
                     self.arrow_draft = None;
                     self.area_draft.clear();
+                    self.room_draft.clear();
                     self.wall_press_origin = None;
                     self.additional_selections.clear();
                 }
@@ -2564,7 +2831,7 @@ impl RppApp {
                     ui.label(
                         egui::RichText::new(self.localizer.text(self.tool.instruction_key()))
                             .size(11.0)
-                            .color(Color32::from_gray(95)),
+                            .color(self.muted_text_color()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let counts = self.localizer.format(
@@ -2574,6 +2841,11 @@ impl RppApp {
                                 (
                                     "wall_suffix",
                                     if self.plan.walls.len() == 1 { "" } else { "s" }.to_owned(),
+                                ),
+                                ("rooms", self.plan.rooms.len().to_string()),
+                                (
+                                    "room_suffix",
+                                    if self.plan.rooms.len() == 1 { "" } else { "s" }.to_owned(),
                                 ),
                                 ("lines", self.plan.lines.len().to_string()),
                                 (
@@ -2626,7 +2898,7 @@ impl RppApp {
                         ui.label(
                             egui::RichText::new(counts)
                                 .size(11.0)
-                                .color(Color32::from_gray(95)),
+                                .color(self.muted_text_color()),
                         );
                         if let Some(cursor) = self.cursor_world {
                             ui.label(
@@ -2645,13 +2917,13 @@ impl RppApp {
                                     ],
                                 ))
                                 .size(11.0)
-                                .color(Color32::from_gray(95)),
+                                .color(self.muted_text_color()),
                             );
                         }
                         ui.label(
                             egui::RichText::new(format!("{:.0} %", self.zoom * 100.0))
                                 .size(11.0)
-                                .color(Color32::from_gray(95)),
+                                .color(self.muted_text_color()),
                         );
                     });
                 });
@@ -2682,8 +2954,15 @@ impl RppApp {
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(zoom_rect), |ui| {
                     egui::Frame::new()
-                        .fill(Color32::WHITE)
-                        .stroke(Stroke::new(1.0, Color32::from_gray(205)))
+                        .fill(self.panel_fill())
+                        .stroke(Stroke::new(
+                            1.0,
+                            if self.theme == AppTheme::Light {
+                                Color32::from_gray(205)
+                            } else {
+                                Color32::from_gray(75)
+                            },
+                        ))
                         .show(ui, |ui| {
                             ui.horizontal_centered(|ui| {
                                 if ui.small_button("−").clicked() {
@@ -2761,8 +3040,15 @@ impl RppApp {
             self.handle_area_events(ctx, response, rect);
             return;
         }
+        if self.tool == Tool::Room {
+            self.handle_room_events(ctx, response, rect);
+            return;
+        }
 
-        let Some(pointer_pos) = response.interact_pointer_pos() else {
+        let pointer_pos = response
+            .interact_pointer_pos()
+            .or_else(|| ctx.input(|input| input.pointer.latest_pos()));
+        let Some(pointer_pos) = pointer_pos else {
             return;
         };
         let world = self.screen_to_world(rect, pointer_pos);
@@ -2781,6 +3067,7 @@ impl RppApp {
             };
             let id = compass.id.clone();
             self.plan.compasses.push(compass);
+            self.assign_to_active_layer(&id);
             self.selection = Some(Selection::Compass(id));
             self.status = self.localizer.text("status.compass_added");
             self.commit(before);
@@ -2804,6 +3091,7 @@ impl RppApp {
             };
             let id = text.id.clone();
             self.plan.texts.push(text);
+            self.assign_to_active_layer(&id);
             self.selection = Some(Selection::Text(id));
             self.status = self.localizer.text("status.text_added");
             self.commit(before);
@@ -2839,6 +3127,7 @@ impl RppApp {
                     };
                     let id = door.id.clone();
                     self.plan.doors.push(door);
+                    self.assign_to_active_layer(&id);
                     self.selection = Some(Selection::Door(id));
                     self.status = self.localizer.text("status.door_added");
                     self.commit(before);
@@ -2873,6 +3162,7 @@ impl RppApp {
                     };
                     let id = window.id.clone();
                     self.plan.windows.push(window);
+                    self.assign_to_active_layer(&id);
                     self.selection = Some(Selection::Window(id));
                     self.status = self.localizer.text("status.window_added");
                     self.commit(before);
@@ -2899,6 +3189,7 @@ impl RppApp {
             };
             let id = object.id.clone();
             self.plan.objects.push(object);
+            self.assign_to_active_layer(&id);
             self.selection = Some(Selection::Object(id));
             self.status = self.localizer.text("status.object_added");
             self.commit(before);
@@ -2912,23 +3203,37 @@ impl RppApp {
                 if !additive_selection {
                     let selected_started =
                         self.begin_group_drag(world) || self.begin_selected_drag(world);
-                    if !selected_started
-                        && !self.begin_compass_drag(world)
-                        && !self.begin_text_drag(world)
-                        && !self.begin_window_drag(world)
-                        && !self.begin_door_drag(world)
-                        && !self.begin_wall_drag(world)
-                        && !self.begin_line_drag(world)
-                        && !self.begin_object_drag(world)
-                        && !self.begin_area_drag(world)
-                    {
-                        self.begin_image_drag(world);
+                    let item_started = selected_started
+                        || self.begin_compass_drag(world)
+                        || self.begin_text_drag(world)
+                        || self.begin_window_drag(world)
+                        || self.begin_door_drag(world)
+                        || self.begin_wall_drag(world)
+                        || self.begin_line_drag(world)
+                        || self.begin_object_drag(world)
+                        || self.begin_area_drag(world)
+                        || self.begin_room_drag(world)
+                        || self.begin_image_drag(world);
+                    if !item_started {
+                        self.selection = None;
+                        self.additional_selections.clear();
+                        self.selection_box = Some(DraftWall {
+                            start: world,
+                            end: world,
+                        });
                     }
+                } else if self.hit_selections(world).is_empty() {
+                    self.selection_box = Some(DraftWall {
+                        start: world,
+                        end: world,
+                    });
                 }
             }
             if response.dragged_by(PointerButton::Primary) {
                 if self.group_drag.is_some() {
                     self.update_group_drag(world);
+                } else if let Some(selection_box) = &mut self.selection_box {
+                    selection_box.end = world;
                 } else if self.door_drag.is_some() {
                     self.update_door_drag(world);
                 } else if self.window_drag.is_some() {
@@ -2939,6 +3244,8 @@ impl RppApp {
                     self.update_compass_drag(world);
                 } else if self.area_drag.is_some() {
                     self.update_area_drag(world);
+                } else if self.room_drag.is_some() {
+                    self.update_room_drag(world);
                 } else if self.object_drag.is_some() {
                     self.update_object_drag(world);
                 } else if self.arrow_drag.is_some() {
@@ -2964,6 +3271,8 @@ impl RppApp {
                     self.commit(drag.before);
                 } else if let Some(drag) = self.area_drag.take() {
                     self.commit(drag.before);
+                } else if let Some(drag) = self.room_drag.take() {
+                    self.commit(drag.before);
                 } else if let Some(drag) = self.object_drag.take() {
                     self.commit(drag.before);
                 } else if let Some(drag) = self.arrow_drag.take() {
@@ -2973,10 +3282,14 @@ impl RppApp {
                 } else if let Some(drag) = self.image_drag.take() {
                     self.commit(drag.before);
                 } else if let Some(drag) = self.wall_drag.take() {
+                    self.refresh_automatic_rooms();
                     self.commit(drag.before);
+                } else if let Some(selection_box) = self.selection_box.take() {
+                    self.select_box_contents(&selection_box, additive_selection);
                 }
             }
             if response.clicked_by(PointerButton::Primary) {
+                self.selection_box = None;
                 self.select_at(world, additive_selection);
             }
         }
@@ -3024,6 +3337,7 @@ impl RppApp {
             };
             let id = line.id.clone();
             self.plan.lines.push(line);
+            self.assign_to_active_layer(&id);
             self.selection = Some(Selection::Line(id));
             self.status = self.localizer.text("status.line_added");
             self.commit(before);
@@ -3031,16 +3345,18 @@ impl RppApp {
     }
 
     fn handle_measure_events(&mut self, ctx: &egui::Context, rect: Rect) {
-        let (pressed, down, released, pointer) = ctx.input(|input| {
+        let (pressed, down, released, pointer, shift) = ctx.input(|input| {
             (
                 input.pointer.button_pressed(PointerButton::Primary),
                 input.pointer.button_down(PointerButton::Primary),
                 input.pointer.button_released(PointerButton::Primary),
                 input.pointer.interact_pos(),
+                input.modifiers.shift,
             )
         });
         if pressed && let Some(position) = pointer.filter(|position| rect.contains(*position)) {
-            let point = self.screen_to_world(rect, position);
+            let raw = self.screen_to_world(rect, position);
+            let point = if shift { self.snap_point(raw) } else { raw };
             self.measurement = Some(DraftWall {
                 start: point,
                 end: point,
@@ -3050,7 +3366,8 @@ impl RppApp {
             && let Some(position) = pointer
             && self.measurement.is_some()
         {
-            let end = self.screen_to_world(rect, position);
+            let raw = self.screen_to_world(rect, position);
+            let end = if shift { self.snap_point(raw) } else { raw };
             if let Some(measurement) = &mut self.measurement {
                 measurement.end = end;
             }
@@ -3110,6 +3427,7 @@ impl RppApp {
             };
             let id = arrow.id.clone();
             self.plan.arrows.push(arrow);
+            self.assign_to_active_layer(&id);
             self.selection = Some(Selection::Arrow(id));
             self.status = self.localizer.text("status.arrow_added");
             self.commit(before);
@@ -3128,7 +3446,12 @@ impl RppApp {
         if response.clicked_by(PointerButton::Primary)
             && let Some(position) = response.interact_pointer_pos()
         {
-            let point = self.snap_point(self.screen_to_world(rect, position));
+            let raw = self.screen_to_world(rect, position);
+            let point = if ctx.input(|input| input.modifiers.shift) {
+                self.snap_point(raw)
+            } else {
+                raw
+            };
             if self
                 .area_draft
                 .last()
@@ -3140,20 +3463,21 @@ impl RppApp {
     }
 
     fn finish_area(&mut self) {
-        if self.area_draft.len() < 3 {
-            self.area_draft.clear();
+        let points = normalized_polygon_points(&std::mem::take(&mut self.area_draft));
+        if points.len() < 3 {
             return;
         }
         let before = self.snapshot();
         let area = AreaShape {
             id: make_id("area"),
-            points: std::mem::take(&mut self.area_draft),
+            points,
             fill_color: self.default_area_fill_color,
             stroke_color: default_area_stroke_color(),
             locked: false,
         };
         let id = area.id.clone();
         self.plan.areas.push(area);
+        self.assign_to_active_layer(&id);
         self.selection = Some(Selection::Area(id));
         self.status = self.localizer.text("status.area_added");
         self.commit(before);
@@ -3172,7 +3496,7 @@ impl RppApp {
                     modifiers,
                 } => {
                     if pressed && rect.contains(pos) {
-                        let start = self.snap_point(self.screen_to_world(rect, pos));
+                        let start = self.wall_snap_point(self.screen_to_world(rect, pos));
                         self.wall_press_origin = Some(start);
                         self.wall_press_created_draft = self.draft.is_none();
                         if self.wall_press_created_draft {
@@ -3182,11 +3506,11 @@ impl RppApp {
                         && let Some(press_origin) = self.wall_press_origin.take()
                         && let Some(mut draft) = self.draft.take()
                     {
-                        let end = self.snap_with_axis(
+                        let end = self.magnet_wall_endpoint(self.snap_with_axis(
                             self.screen_to_world(rect, pos),
                             draft.start,
                             modifiers.shift,
-                        );
+                        ));
                         let was_drag = press_origin.distance(end) >= MIN_WALL;
                         if !self.wall_press_created_draft || was_drag {
                             draft.end = end;
@@ -3204,7 +3528,9 @@ impl RppApp {
                     let shift = ctx.input(|input| input.modifiers.shift);
                     let world = self.screen_to_world(rect, pos);
                     let start = self.draft.as_ref().map(|draft| draft.start);
-                    let snapped = start.map(|start| self.snap_with_axis(world, start, shift));
+                    let snapped = start.map(|start| {
+                        self.magnet_wall_endpoint(self.snap_with_axis(world, start, shift))
+                    });
                     if let Some(draft) = &mut self.draft {
                         draft.end = snapped.unwrap_or(world);
                     }
@@ -3240,6 +3566,8 @@ impl RppApp {
         };
         let id = wall.id.clone();
         self.plan.walls.push(wall);
+        self.assign_to_active_layer(&id);
+        self.refresh_automatic_rooms();
         self.selection = Some(Selection::Wall(id));
         self.status = self.localizer.text("status.wall_added");
         self.commit(before);
@@ -3308,6 +3636,12 @@ impl RppApp {
                 .iter()
                 .find(|area| area.id == *id)
                 .is_some_and(|area| point_in_area(pointer, area)),
+            Some(Selection::Room(id)) => self
+                .plan
+                .rooms
+                .iter()
+                .find(|room| room.id == *id)
+                .is_some_and(|room| crate::room_detection::point_in_polygon(pointer, &room.points)),
             Some(Selection::Compass(id)) => self
                 .plan
                 .compasses
@@ -3348,6 +3682,7 @@ impl RppApp {
             Some(Selection::Object(_)) => self.begin_object_drag(pointer),
             Some(Selection::Image(_)) => self.begin_image_drag(pointer),
             Some(Selection::Area(_)) => self.begin_area_drag(pointer),
+            Some(Selection::Room(_)) => self.begin_room_drag(pointer),
             Some(Selection::Compass(_)) => self.begin_compass_drag(pointer),
             Some(Selection::Arrow(_)) => self.begin_arrow_drag(pointer),
             None => false,
@@ -3384,7 +3719,12 @@ impl RppApp {
         );
         drag.last_pointer = pointer;
         let selections = drag.selections.clone();
-        for selection in &selections {
+        let movable = selections
+            .iter()
+            .filter(|selection| !opening_follows_selected_wall(&self.plan, selection, &selections))
+            .cloned()
+            .collect::<Vec<_>>();
+        for selection in &movable {
             self.translate_selection(selection, delta);
         }
     }
@@ -3438,6 +3778,17 @@ impl RppApp {
             Selection::Area(id) => {
                 if let Some(item) = self.plan.areas.iter_mut().find(|item| &item.id == id)
                     && !item.locked
+                {
+                    for point in &mut item.points {
+                        point.x += delta.x;
+                        point.y += delta.y;
+                    }
+                }
+            }
+            Selection::Room(id) => {
+                if let Some(item) = self.plan.rooms.iter_mut().find(|item| &item.id == id)
+                    && !item.locked
+                    && item.source == RoomSource::Manual
                 {
                     for point in &mut item.points {
                         point.x += delta.x;
@@ -4252,6 +4603,27 @@ impl RppApp {
         );
     }
 
+    fn select_box_contents(&mut self, selection_box: &DraftWall, additive: bool) {
+        let matches = selections_in_box(&self.plan, selection_box);
+        if !additive {
+            self.selection = None;
+            self.additional_selections.clear();
+        }
+        for item in matches {
+            if !self.is_selected(&item) {
+                if self.selection.is_none() {
+                    self.selection = Some(item);
+                } else {
+                    self.additional_selections.push(item);
+                }
+            }
+        }
+        let count = self.selected_items().len();
+        self.status = self
+            .localizer
+            .format("status.items_selected", &[("count", count.to_string())]);
+    }
+
     fn is_selected(&self, selection: &Selection) -> bool {
         self.selection.as_ref() == Some(selection) || self.additional_selections.contains(selection)
     }
@@ -4341,6 +4713,11 @@ impl RppApp {
                 hits.push(Selection::Area(area.id.clone()));
             }
         }
+        for room in self.plan.rooms.iter().rev() {
+            if crate::room_detection::point_in_polygon(pointer, &room.points) {
+                hits.push(Selection::Room(room.id.clone()));
+            }
+        }
         for arrow in self.plan.arrows.iter().rev() {
             let line = PlanLine {
                 id: String::new(),
@@ -4355,6 +4732,7 @@ impl RppApp {
                 hits.push(Selection::Arrow(arrow.id.clone()));
             }
         }
+        hits.retain(|selection| self.plan.item_editable(layers::selection_id(selection)));
         hits
     }
 
@@ -4389,10 +4767,11 @@ impl eframe::App for RppApp {
         self.inspector(ui);
         self.canvas(
             ui,
-            popup_was_open || ctx.any_popup_open() || self.settings_open,
+            popup_was_open || ctx.any_popup_open() || self.settings_open || self.layers_open,
         );
         self.confirm_discard_dialog(&ctx);
         self.settings_window(&ctx);
+        self.layers_window(&ctx);
     }
 }
 
@@ -4544,6 +4923,28 @@ fn projection(wall: &Wall, point: Point) -> (f32, Point, f32) {
     (t, projected, point.distance(projected))
 }
 
+fn magnet_to_wall(walls: &[Wall], point: Point, threshold: f32) -> Point {
+    let endpoint = walls
+        .iter()
+        .flat_map(|wall| [wall.start(), wall.end()])
+        .map(|candidate| (candidate, point.distance(candidate)))
+        .filter(|(_, distance)| *distance <= threshold)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((candidate, _)) = endpoint {
+        return candidate;
+    }
+    let mut best = None::<(Point, f32)>;
+    for wall in walls {
+        let (_, projected, projected_distance) = projection(wall, point);
+        if projected_distance <= threshold
+            && best.is_none_or(|(_, best_distance)| projected_distance < best_distance)
+        {
+            best = Some((projected, projected_distance));
+        }
+    }
+    best.map_or(point, |(candidate, _)| candidate)
+}
+
 fn line_distance(line: &PlanLine, point: Point) -> f32 {
     let dx = line.x2 - line.x1;
     let dy = line.y2 - line.y1;
@@ -4683,14 +5084,35 @@ fn text_dimensions(text: &TextObject) -> (f32, f32) {
 }
 
 fn area_center(area: &AreaShape) -> Point {
-    if area.points.is_empty() {
+    let points = normalized_polygon_points(&area.points);
+    if points.is_empty() {
         return Point::default();
     }
-    let (x, y) = area
-        .points
+    let (x, y) = points
         .iter()
         .fold((0.0, 0.0), |(x, y), point| (x + point.x, y + point.y));
-    Point::new(x / area.points.len() as f32, y / area.points.len() as f32)
+    Point::new(x / points.len() as f32, y / points.len() as f32)
+}
+
+fn normalized_polygon_points(points: &[Point]) -> Vec<Point> {
+    let mut normalized = Vec::with_capacity(points.len());
+    for point in points {
+        if normalized
+            .last()
+            .is_none_or(|previous: &Point| previous.distance(*point) > 0.001)
+        {
+            normalized.push(*point);
+        }
+    }
+    if normalized.len() > 1
+        && normalized
+            .first()
+            .zip(normalized.last())
+            .is_some_and(|(first, last)| first.distance(*last) <= 0.001)
+    {
+        normalized.pop();
+    }
+    normalized
 }
 
 fn format_area(square_centimeters: f32, unit: Unit) -> String {
@@ -4751,6 +5173,170 @@ fn object_resize_handles(object: &PlanObject) -> [Point; 8] {
     ]
 }
 
+fn bounds_from_points(points: impl IntoIterator<Item = Point>) -> Option<(Point, Point)> {
+    let mut bounds: Option<(Point, Point)> = None;
+    for point in points {
+        bounds = Some(match bounds {
+            Some((minimum, maximum)) => (
+                Point::new(minimum.x.min(point.x), minimum.y.min(point.y)),
+                Point::new(maximum.x.max(point.x), maximum.y.max(point.y)),
+            ),
+            None => (point, point),
+        });
+    }
+    bounds
+}
+
+fn selection_bounds(plan: &PlanFile, selection: &Selection) -> Option<(Point, Point)> {
+    match selection {
+        Selection::Wall(id) => {
+            let wall = plan.walls.iter().find(|item| &item.id == id)?;
+            let padding = wall.thickness * 0.5;
+            let (minimum, maximum) = bounds_from_points([wall.start(), wall.end()])?;
+            Some((
+                Point::new(minimum.x - padding, minimum.y - padding),
+                Point::new(maximum.x + padding, maximum.y + padding),
+            ))
+        }
+        Selection::Line(id) => {
+            let line = plan.lines.iter().find(|item| &item.id == id)?;
+            bounds_from_points([line.start(), line.end()])
+        }
+        Selection::Text(id) => {
+            let text = plan.texts.iter().find(|item| &item.id == id)?;
+            let (width, height) = text_dimensions(text);
+            bounds_from_points(rotated_rectangle(
+                text.x,
+                text.y,
+                width,
+                height,
+                text.rotation,
+            ))
+        }
+        Selection::Door(id) => {
+            let door = plan.doors.iter().find(|item| &item.id == id)?;
+            let wall = plan.walls.iter().find(|wall| wall.id == door.wall_id)?;
+            let half = door.width / (2.0 * wall.length().max(f32::EPSILON));
+            bounds_from_points([
+                wall.point_at((door.t - half).clamp(0.0, 1.0)),
+                wall.point_at((door.t + half).clamp(0.0, 1.0)),
+            ])
+        }
+        Selection::Window(id) => {
+            let window = plan.windows.iter().find(|item| &item.id == id)?;
+            let wall = plan.walls.iter().find(|wall| wall.id == window.wall_id)?;
+            let half = window.width / (2.0 * wall.length().max(f32::EPSILON));
+            bounds_from_points([
+                wall.point_at((window.t - half).clamp(0.0, 1.0)),
+                wall.point_at((window.t + half).clamp(0.0, 1.0)),
+            ])
+        }
+        Selection::Image(id) => {
+            let image = plan.images.iter().find(|item| &item.id == id)?;
+            bounds_from_points(rotated_rectangle(
+                image.x,
+                image.y,
+                image.width,
+                image.height,
+                image.rotation,
+            ))
+        }
+        Selection::Object(id) => {
+            let object = plan.objects.iter().find(|item| &item.id == id)?;
+            bounds_from_points(rotated_rectangle(
+                object.x,
+                object.y,
+                object.width,
+                object.height,
+                object.rotation,
+            ))
+        }
+        Selection::Area(id) => {
+            let area = plan.areas.iter().find(|item| &item.id == id)?;
+            bounds_from_points(area.points.iter().copied())
+        }
+        Selection::Room(id) => {
+            let room = plan.rooms.iter().find(|item| &item.id == id)?;
+            bounds_from_points(room.points.iter().copied())
+        }
+        Selection::Compass(id) => {
+            let compass = plan.compasses.iter().find(|item| &item.id == id)?;
+            let radius = compass.size * 0.6;
+            Some((
+                Point::new(compass.x - radius, compass.y - radius),
+                Point::new(compass.x + radius, compass.y + radius),
+            ))
+        }
+        Selection::Arrow(id) => {
+            let arrow = plan.arrows.iter().find(|item| &item.id == id)?;
+            let padding = arrow.width * 0.5;
+            let (minimum, maximum) =
+                bounds_from_points([Point::new(arrow.x, arrow.y), arrow.end()])?;
+            Some((
+                Point::new(minimum.x - padding, minimum.y - padding),
+                Point::new(maximum.x + padding, maximum.y + padding),
+            ))
+        }
+    }
+}
+
+fn selections_in_box(plan: &PlanFile, selection_box: &DraftWall) -> Vec<Selection> {
+    let left_to_right = selection_box.end.x >= selection_box.start.x;
+    let minimum = Point::new(
+        selection_box.start.x.min(selection_box.end.x),
+        selection_box.start.y.min(selection_box.end.y),
+    );
+    let maximum = Point::new(
+        selection_box.start.x.max(selection_box.end.x),
+        selection_box.start.y.max(selection_box.end.y),
+    );
+
+    selectable_selections(plan)
+        .into_iter()
+        .filter(|selection| {
+            let Some((item_minimum, item_maximum)) = selection_bounds(plan, selection) else {
+                return false;
+            };
+            if left_to_right {
+                item_minimum.x >= minimum.x
+                    && item_minimum.y >= minimum.y
+                    && item_maximum.x <= maximum.x
+                    && item_maximum.y <= maximum.y
+            } else {
+                item_maximum.x >= minimum.x
+                    && item_maximum.y >= minimum.y
+                    && item_minimum.x <= maximum.x
+                    && item_minimum.y <= maximum.y
+            }
+        })
+        .collect()
+}
+
+fn opening_follows_selected_wall(
+    plan: &PlanFile,
+    selection: &Selection,
+    selections: &[Selection],
+) -> bool {
+    let parent_wall = match selection {
+        Selection::Door(id) => plan
+            .doors
+            .iter()
+            .find(|item| &item.id == id)
+            .map(|item| item.wall_id.as_str()),
+        Selection::Window(id) => plan
+            .windows
+            .iter()
+            .find(|item| &item.id == id)
+            .map(|item| item.wall_id.as_str()),
+        _ => None,
+    };
+    parent_wall.is_some_and(|wall_id| {
+        selections
+            .iter()
+            .any(|item| matches!(item, Selection::Wall(id) if id == wall_id))
+    })
+}
+
 fn plan_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
     let mut bounds: Option<(Point, Point)> = None;
     let mut include = |point: Point| {
@@ -4764,20 +5350,32 @@ fn plan_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
     };
 
     for wall in &plan.walls {
+        if !plan.item_visible(&wall.id) {
+            continue;
+        }
         include(wall.start());
         include(wall.end());
     }
     for line in &plan.lines {
+        if !plan.item_visible(&line.id) {
+            continue;
+        }
         include(line.start());
         include(line.end());
     }
     for image in &plan.images {
+        if !plan.item_visible(&image.id) {
+            continue;
+        }
         for point in rotated_rectangle(image.x, image.y, image.width, image.height, image.rotation)
         {
             include(point);
         }
     }
     for object in &plan.objects {
+        if !plan.item_visible(&object.id) {
+            continue;
+        }
         for point in rotated_rectangle(
             object.x,
             object.y,
@@ -4789,22 +5387,42 @@ fn plan_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for text in &plan.texts {
+        if !plan.item_visible(&text.id) {
+            continue;
+        }
         let (width, height) = text_dimensions(text);
         for point in rotated_rectangle(text.x, text.y, width, height, text.rotation) {
             include(point);
         }
     }
     for area in &plan.areas {
+        if !plan.item_visible(&area.id) {
+            continue;
+        }
         for point in &area.points {
             include(*point);
         }
     }
+    for room in &plan.rooms {
+        if !plan.item_visible(&room.id) {
+            continue;
+        }
+        for point in &room.points {
+            include(*point);
+        }
+    }
     for compass in &plan.compasses {
+        if !plan.item_visible(&compass.id) {
+            continue;
+        }
         let radius = compass.size * 0.6;
         include(Point::new(compass.x - radius, compass.y - radius));
         include(Point::new(compass.x + radius, compass.y + radius));
     }
     for arrow in &plan.arrows {
+        if !plan.item_visible(&arrow.id) {
+            continue;
+        }
         let end = arrow.end();
         let radius = arrow.width.max(2.0);
         include(Point::new(arrow.x - radius, arrow.y - radius));
@@ -5017,21 +5635,32 @@ fn write_plan_safely(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()
         file.sync_all()?;
     }
     if path.exists() {
-        fs::copy(path, backup)?;
+        if backup.exists() {
+            fs::remove_file(&backup)?;
+        }
+        fs::rename(path, &backup)?;
     }
-    fs::copy(&temporary, path)?;
-    fs::remove_file(temporary)?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        if backup.exists() && !path.exists() {
+            let _ = fs::rename(&backup, path);
+        }
+        return Err(error);
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Selection, cycle_hit_selection, default_image_dimensions, plan_bounds,
-        process_imported_image, scroll_zoom_factor, selectable_selections,
-        toggle_additive_selection, write_plan_safely,
+        DraftWall, Selection, cycle_hit_selection, default_image_dimensions, magnet_to_wall,
+        normalized_polygon_points, opening_follows_selected_wall, plan_bounds,
+        process_imported_image, scroll_zoom_factor, selectable_selections, selections_in_box,
+        toggle_additive_selection, triangulate_polygon, write_plan_safely,
     };
-    use crate::model::{ObjectKind, PlanFile, PlanObject, Point, Wall, WallKind};
+    use crate::model::{
+        Door, DoorKind, HingeSide, ObjectKind, PlanFile, PlanObject, Point, SwingSide, Wall,
+        WallKind,
+    };
 
     #[test]
     fn wheel_zoom_is_gentle_and_bounded() {
@@ -5040,6 +5669,33 @@ mod tests {
         assert!((scroll_zoom_factor(-1.0) - (1.0 / 1.05)).abs() < f32::EPSILON);
         assert_eq!(scroll_zoom_factor(5000.0), scroll_zoom_factor(1.0));
         assert_eq!(scroll_zoom_factor(-5000.0), scroll_zoom_factor(-1.0));
+    }
+
+    #[test]
+    fn wall_closure_magnet_works_without_grid_snapping() {
+        let wall = Wall {
+            id: "wall".to_owned(),
+            x1: 0.0,
+            y1: 0.0,
+            x2: 200.0,
+            y2: 0.0,
+            thickness: 14.0,
+            kind: WallKind::Interior,
+            color: [52, 56, 59],
+            locked: false,
+        };
+        assert_eq!(
+            magnet_to_wall(std::slice::from_ref(&wall), Point::new(198.0, 3.0), 12.0),
+            Point::new(200.0, 0.0)
+        );
+        assert_eq!(
+            magnet_to_wall(std::slice::from_ref(&wall), Point::new(100.0, 4.0), 12.0),
+            Point::new(100.0, 0.0)
+        );
+        assert_eq!(
+            magnet_to_wall(&[wall], Point::new(100.0, 20.0), 12.0),
+            Point::new(100.0, 20.0)
+        );
     }
 
     #[test]
@@ -5180,6 +5836,134 @@ mod tests {
     }
 
     #[test]
+    fn selection_box_uses_cad_direction_rules() {
+        let mut plan = PlanFile::default();
+        plan.walls.push(Wall {
+            id: "inside".to_owned(),
+            x1: 20.0,
+            y1: 20.0,
+            x2: 80.0,
+            y2: 20.0,
+            thickness: 10.0,
+            kind: WallKind::Interior,
+            color: [52, 56, 59],
+            locked: false,
+        });
+        plan.walls.push(Wall {
+            id: "crossing".to_owned(),
+            x1: 70.0,
+            y1: 60.0,
+            x2: 140.0,
+            y2: 60.0,
+            thickness: 10.0,
+            kind: WallKind::Interior,
+            color: [52, 56, 59],
+            locked: false,
+        });
+
+        let enclosing = DraftWall {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(100.0, 100.0),
+        };
+        assert_eq!(
+            selections_in_box(&plan, &enclosing),
+            vec![Selection::Wall("inside".to_owned())]
+        );
+
+        let crossing = DraftWall {
+            start: Point::new(100.0, 100.0),
+            end: Point::new(0.0, 0.0),
+        };
+        assert_eq!(
+            selections_in_box(&plan, &crossing),
+            vec![
+                Selection::Wall("inside".to_owned()),
+                Selection::Wall("crossing".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn rectangle_area_triangulates_to_its_complete_surface() {
+        let triangles = triangulate_polygon(&[
+            eframe::egui::Pos2::new(0.0, 0.0),
+            eframe::egui::Pos2::new(100.0, 0.0),
+            eframe::egui::Pos2::new(100.0, 80.0),
+            eframe::egui::Pos2::new(0.0, 80.0),
+        ]);
+        let area = triangles
+            .iter()
+            .map(|triangle| {
+                let [a, b, c] = *triangle;
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum::<f32>();
+
+        assert_eq!(triangles.len(), 2);
+        assert!((area - 8_000.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn area_closing_point_is_removed_before_triangulation() {
+        let points = normalized_polygon_points(&[
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 0.0),
+            Point::new(100.0, 80.0),
+            Point::new(0.0, 80.0),
+            Point::new(0.0, 0.0),
+        ]);
+
+        assert_eq!(points.len(), 4);
+        let screen_points = points
+            .iter()
+            .map(|point| eframe::egui::Pos2::new(point.x, point.y))
+            .collect::<Vec<_>>();
+        assert_eq!(triangulate_polygon(&screen_points).len(), 2);
+    }
+
+    #[test]
+    fn selected_opening_is_not_moved_twice_with_its_wall() {
+        let mut plan = PlanFile::default();
+        plan.walls.push(Wall {
+            id: "wall-1".to_owned(),
+            x1: 0.0,
+            y1: 0.0,
+            x2: 200.0,
+            y2: 0.0,
+            thickness: 10.0,
+            kind: WallKind::Interior,
+            color: [52, 56, 59],
+            locked: false,
+        });
+        plan.doors.push(Door {
+            id: "door-1".to_owned(),
+            wall_id: "wall-1".to_owned(),
+            t: 0.5,
+            width: 80.0,
+            kind: DoorKind::Single,
+            hinge: HingeSide::Left,
+            swing: SwingSide::Inward,
+            color: [70, 70, 70],
+            locked: false,
+        });
+        let selections = vec![
+            Selection::Wall("wall-1".to_owned()),
+            Selection::Door("door-1".to_owned()),
+        ];
+
+        assert!(opening_follows_selected_wall(
+            &plan,
+            &selections[1],
+            &selections
+        ));
+        assert!(!opening_follows_selected_wall(
+            &plan,
+            &selections[0],
+            &selections
+        ));
+    }
+
+    #[test]
     fn safe_save_keeps_previous_version() {
         let folder = std::env::temp_dir().join(format!("rpp-save-test-{}", std::process::id()));
         std::fs::create_dir_all(&folder).expect("dossier temporaire");
@@ -5193,6 +5977,21 @@ mod tests {
             std::fs::read(path.with_extension("rpp.bak")).expect("previous backup"),
             b"previous version"
         );
+        assert!(!path.with_extension("rpp.tmp").exists());
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn safe_first_save_leaves_no_temporary_file() {
+        let folder = std::env::temp_dir().join(format!("rpp-first-save-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("temporary folder");
+        let path = folder.join("new-plan.rpp");
+
+        write_plan_safely(&path, b"first version").expect("first save");
+
+        assert_eq!(std::fs::read(&path).expect("saved file"), b"first version");
+        assert!(!path.with_extension("rpp.tmp").exists());
+        assert!(!path.with_extension("rpp.bak").exists());
         let _ = std::fs::remove_dir_all(folder);
     }
 }
