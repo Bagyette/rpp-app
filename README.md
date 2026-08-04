@@ -1,4 +1,4 @@
-# RPP (Ran Plan Plan)
+# RPP - Ran Plan Plan
 
 RPP is a small 2D floor-plan editor for Windows. I started it after failing to
 find an open-source program that was easy to learn without being limited to
