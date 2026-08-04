@@ -137,12 +137,12 @@ languages:
       tool.select_instruction: Click to select · Shift+click to add · Delete to remove
       tool.wall_instruction: Click successive points · Shift locks an axis
       tool.line_instruction: Drag from one point to another · Shift locks an axis
-      tool.measure_instruction: Drag to measure · the measurement disappears on release
+      tool.measure_instruction: Drag to measure · hold Shift to snap to the grid
       tool.text_instruction: Click to place editable text
       tool.door_instruction: Click a wall to place a door
       tool.window_instruction: Click a wall to place a window
       tool.object_instruction: Click the plan to place an object
-      tool.area_instruction: Click polygon corners · Enter, double-click, or right-click to close
+      tool.area_instruction: Click polygon corners · hold Shift to snap a point
       tool.compass_instruction: Click to place a movable compass rose
       panel.properties: Properties
       panel.empty_selection: Select a plan item to edit its properties.
@@ -221,11 +221,49 @@ languages:
       hint.fit_plan: "Fit the complete plan · Home"
       hint.first_wall: Draw your first wall
       hint.first_wall_detail: Click successive points on the grid.
-      status.counts: "{walls} wall{wall_suffix} · {lines} line{line_suffix} · {texts} text{text_suffix} · {areas} area{area_suffix} · {doors} door{door_suffix} · {windows} window{window_suffix} · {objects} object{object_suffix} · {images} image{image_suffix} · {compasses} compass"
+      status.counts: "{walls} wall{wall_suffix} · {rooms} room{room_suffix} · {doors} door{door_suffix} · {windows} window{window_suffix} · {objects} object{object_suffix}"
+      action.layers: Layers
+      action.delete_room: Delete room boundary
+      tool.room: Room
+      tool.room_instruction: Click the room boundary · Enter or double-click to finish · hold Shift to snap
+      status.room_added: Manual room created
+      status.room_deleted: Manual room deleted
+      status.room_duplicated: Room duplicated as a manual room
+      status.room_locked: Automatic or locked room cannot be moved
+      selection.room: Room selected
+      property.layer: Layer
+      property.source: Detection
+      property.perimeter: Perimeter
+      property.fill_visible: Show fill
+      layers.title: Layers
+      layers.add: Add layer
+      layers.help: Eye · lock · name · opacity
+      layers.new_name: "Layer {number}"
+      layers.unnamed: Untitled layer
+      room.default_name: Room
+      room.source_automatic: Automatic from walls
+      room.source_manual: Manual boundary
+      room.type_custom: Custom
+      room.type_living_room: Living room
+      room.type_bedroom: Bedroom
+      room.type_kitchen: Kitchen
+      room.type_bathroom: Bathroom
+      room.type_hallway: Hallway
+      room.type_office: Office
+      room.type_garage: Garage
+      room.type_storage: Storage
       status.cursor: "X {x} · Y {y} {unit}   |"
       action.settings: Settings
       action.lock_all: Lock all
       action.unlock_all: Unlock all
+      panel.align: Align
+      action.align_left: Left
+      action.align_center: Center
+      action.align_right: Right
+      action.align_top: Top
+      action.align_middle: Middle
+      action.align_bottom: Bottom
+      status.items_aligned: Items aligned
       action.delete_arrow: Delete arrow
       tool.arrow: Arrow
       tool.arrow_instruction: Drag from the tail to the tip · 64 precise directions
@@ -394,12 +432,12 @@ languages:
       tool.select_instruction: Cliquer pour sélectionner · Maj+clic pour ajouter · Suppr pour effacer
       tool.wall_instruction: Cliquer les sommets successifs · Maj verrouille un axe
       tool.line_instruction: Glisser d’un point à l’autre · Maj verrouille un axe
-      tool.measure_instruction: Glisser pour mesurer · la mesure disparaît au relâchement
+      tool.measure_instruction: Glisser pour mesurer · maintenir Maj pour accrocher à la grille
       tool.text_instruction: Cliquer pour placer un texte modifiable
       tool.door_instruction: Cliquer sur un mur pour poser une porte
       tool.window_instruction: Cliquer sur un mur pour poser une fenêtre
       tool.object_instruction: Cliquer dans le plan pour placer un objet
-      tool.area_instruction: Cliquer les sommets · Entrée, double-clic ou clic droit pour fermer
+      tool.area_instruction: Cliquer les sommets · maintenir Maj pour accrocher un point
       tool.compass_instruction: Cliquer pour placer une rose des vents déplaçable
       panel.properties: Propriétés
       panel.empty_selection: Sélectionnez un élément du plan pour modifier ses propriétés.
@@ -478,11 +516,49 @@ languages:
       hint.fit_plan: "Afficher tout le plan · Début"
       hint.first_wall: Tracez votre premier mur
       hint.first_wall_detail: Cliquez sur les sommets successifs de la grille.
-      status.counts: "{walls} mur{wall_suffix} · {lines} ligne{line_suffix} · {texts} texte{text_suffix} · {areas} surface{area_suffix} · {doors} porte{door_suffix} · {windows} fenêtre{window_suffix} · {objects} objet{object_suffix} · {images} image{image_suffix} · {compasses} rose(s)"
+      status.counts: "{walls} mur{wall_suffix} · {rooms} pièce{room_suffix} · {doors} porte{door_suffix} · {windows} fenêtre{window_suffix} · {objects} objet{object_suffix}"
+      action.layers: Calques
+      action.delete_room: Supprimer la délimitation
+      tool.room: Pièce
+      tool.room_instruction: Cliquer le contour de la pièce · Entrée ou double-clic pour terminer · Maj pour accrocher
+      status.room_added: Pièce manuelle créée
+      status.room_deleted: Pièce manuelle supprimée
+      status.room_duplicated: Pièce dupliquée en pièce manuelle
+      status.room_locked: Une pièce automatique ou verrouillée ne peut pas être déplacée
+      selection.room: Pièce sélectionnée
+      property.layer: Calque
+      property.source: Détection
+      property.perimeter: Périmètre
+      property.fill_visible: Afficher le remplissage
+      layers.title: Calques
+      layers.add: Ajouter un calque
+      layers.help: Œil · verrou · nom · opacité
+      layers.new_name: "Calque {number}"
+      layers.unnamed: Calque sans nom
+      room.default_name: Pièce
+      room.source_automatic: Automatique depuis les murs
+      room.source_manual: Délimitation manuelle
+      room.type_custom: Personnalisée
+      room.type_living_room: Salon
+      room.type_bedroom: Chambre
+      room.type_kitchen: Cuisine
+      room.type_bathroom: Salle de bain
+      room.type_hallway: Couloir
+      room.type_office: Bureau
+      room.type_garage: Garage
+      room.type_storage: Rangement
       status.cursor: "X {x} · Y {y} {unit}   |"
       action.settings: Paramètres
       action.lock_all: Tout verrouiller
       action.unlock_all: Tout déverrouiller
+      panel.align: Aligner
+      action.align_left: Gauche
+      action.align_center: Centre
+      action.align_right: Droite
+      action.align_top: Haut
+      action.align_middle: Milieu
+      action.align_bottom: Bas
+      status.items_aligned: Éléments alignés
       action.delete_arrow: Supprimer la flèche
       tool.arrow: Flèche
       tool.arrow_instruction: Glissez de la base vers la pointe · 64 directions précises
@@ -565,12 +641,12 @@ languages:
       tool.select_instruction: Haz clic para seleccionar · Mayús+clic para selección múltiple
       tool.wall_instruction: Haz clic en puntos sucesivos para crear muros
       tool.line_instruction: Arrastra para crear una línea
-      tool.measure_instruction: Arrastra para medir sin ajuste
+      tool.measure_instruction: Arrastra para medir · mantén Mayús para ajustar a la cuadrícula
       tool.text_instruction: Haz clic para añadir texto
       tool.door_instruction: Haz clic en un muro para añadir una puerta
       tool.window_instruction: Haz clic en un muro para añadir una ventana
       tool.object_instruction: Haz clic para añadir un objeto
-      tool.area_instruction: Haz clic en el contorno · Intro para cerrar
+      tool.area_instruction: Haz clic en el contorno · mantén Mayús para ajustar un punto
       tool.compass_instruction: Haz clic para añadir una rosa de los vientos
       tool.arrow_instruction: Arrastra desde la base hasta la punta · 64 direcciones precisas
       panel.properties: Propiedades
@@ -762,7 +838,37 @@ languages:
       hint.fit_plan: Ajustar todo el plano · Inicio
       hint.first_wall: Dibuja tu primer muro
       hint.first_wall_detail: Haz clic en puntos sucesivos de la cuadrícula.
-      status.counts: "{walls} muro{wall_suffix} · {lines} línea{line_suffix} · {texts} texto{text_suffix} · {areas} área{area_suffix} · {doors} puerta{door_suffix} · {windows} ventana{window_suffix} · {objects} objeto{object_suffix} · {images} imagen{image_suffix} · {compasses} rosa(s)"
+      status.counts: "{walls} muro{wall_suffix} · {rooms} habitación{room_suffix} · {doors} puerta{door_suffix} · {windows} ventana{window_suffix} · {objects} objeto{object_suffix}"
+      action.layers: Capas
+      action.delete_room: Eliminar delimitación
+      tool.room: Habitación
+      tool.room_instruction: Haz clic en el contorno · Intro o doble clic para terminar · Mayús para ajustar
+      status.room_added: Habitación manual creada
+      status.room_deleted: Habitación manual eliminada
+      status.room_duplicated: Habitación duplicada como manual
+      status.room_locked: Una habitación automática o bloqueada no se puede mover
+      selection.room: Habitación seleccionada
+      property.layer: Capa
+      property.source: Detección
+      property.perimeter: Perímetro
+      property.fill_visible: Mostrar relleno
+      layers.title: Capas
+      layers.add: Añadir capa
+      layers.help: Ojo · bloqueo · nombre · opacidad
+      layers.new_name: "Capa {number}"
+      layers.unnamed: Capa sin nombre
+      room.default_name: Habitación
+      room.source_automatic: Automática desde los muros
+      room.source_manual: Delimitación manual
+      room.type_custom: Personalizada
+      room.type_living_room: Sala de estar
+      room.type_bedroom: Dormitorio
+      room.type_kitchen: Cocina
+      room.type_bathroom: Baño
+      room.type_hallway: Pasillo
+      room.type_office: Oficina
+      room.type_garage: Garaje
+      room.type_storage: Almacén
       status.cursor: "X {x} · Y {y} {unit}   |"
       status.arrow_added: Flecha añadida
       status.arrow_deleted: Flecha eliminada
@@ -770,4 +876,12 @@ languages:
       status.arrow_locked: La flecha está bloqueada
       status.items_moved: Elementos desplazados
       status.items_duplicated: Elementos duplicados
+      panel.align: Alinear
+      action.align_left: Izquierda
+      action.align_center: Centro
+      action.align_right: Derecha
+      action.align_top: Arriba
+      action.align_middle: Medio
+      action.align_bottom: Abajo
+      status.items_aligned: Elementos alineados
       language.label: Idioma

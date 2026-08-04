@@ -248,6 +248,12 @@ pub struct PlanFile {
     pub compasses: Vec<CompassRose>,
     #[serde(default)]
     pub arrows: Vec<PlanArrow>,
+    #[serde(default)]
+    pub rooms: Vec<Room>,
+    #[serde(default = "default_layers")]
+    pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub layer_assignments: Vec<LayerAssignment>,
 }
 
 impl Default for PlanFile {
@@ -264,8 +270,201 @@ impl Default for PlanFile {
             areas: Vec::new(),
             compasses: Vec::new(),
             arrows: Vec::new(),
+            rooms: Vec::new(),
+            layers: default_layers(),
+            layer_assignments: Vec::new(),
         }
     }
+}
+
+impl PlanFile {
+    pub fn layer_id_for(&self, item_id: &str) -> &str {
+        self.layer_assignments
+            .iter()
+            .find(|assignment| assignment.item_id == item_id)
+            .map(|assignment| assignment.layer_id.as_str())
+            .unwrap_or(DEFAULT_LAYER_ID)
+    }
+
+    pub fn layer_for(&self, item_id: &str) -> Option<&Layer> {
+        let layer_id = self.layer_id_for(item_id);
+        self.layers.iter().find(|layer| layer.id == layer_id)
+    }
+
+    pub fn item_visible(&self, item_id: &str) -> bool {
+        self.layer_for(item_id).is_none_or(|layer| layer.visible)
+    }
+
+    pub fn item_editable(&self, item_id: &str) -> bool {
+        self.layer_for(item_id)
+            .is_none_or(|layer| layer.visible && !layer.locked)
+    }
+
+    pub fn item_opacity(&self, item_id: &str) -> f32 {
+        self.layer_for(item_id)
+            .map_or(1.0, |layer| layer.opacity.clamp(0.0, 1.0))
+    }
+
+    pub fn assign_to_layer(&mut self, item_id: &str, layer_id: &str) {
+        self.layer_assignments
+            .retain(|assignment| assignment.item_id != item_id);
+        if layer_id != DEFAULT_LAYER_ID {
+            self.layer_assignments.push(LayerAssignment {
+                item_id: item_id.to_owned(),
+                layer_id: layer_id.to_owned(),
+            });
+        }
+    }
+
+    pub fn remove_layer_assignment(&mut self, item_id: &str) {
+        self.layer_assignments
+            .retain(|assignment| assignment.item_id != item_id);
+    }
+}
+
+pub const DEFAULT_LAYER_ID: &str = "default";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default = "default_layer_opacity")]
+    pub opacity: f32,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            id: DEFAULT_LAYER_ID.to_owned(),
+            name: "Default".to_owned(),
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+        }
+    }
+}
+
+pub fn default_layers() -> Vec<Layer> {
+    vec![Layer::default()]
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_layer_opacity() -> f32 {
+    1.0
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayerAssignment {
+    pub item_id: String,
+    pub layer_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoomSource {
+    #[default]
+    Automatic,
+    Manual,
+}
+
+impl RoomSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RoomKind {
+    #[default]
+    Custom,
+    LivingRoom,
+    Bedroom,
+    Kitchen,
+    Bathroom,
+    Hallway,
+    Office,
+    Garage,
+    Storage,
+}
+
+impl RoomKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Custom => "custom",
+            Self::LivingRoom => "living-room",
+            Self::Bedroom => "bedroom",
+            Self::Kitchen => "kitchen",
+            Self::Bathroom => "bathroom",
+            Self::Hallway => "hallway",
+            Self::Office => "office",
+            Self::Garage => "garage",
+            Self::Storage => "storage",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Room {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: RoomKind,
+    #[serde(default)]
+    pub source: RoomSource,
+    pub points: Vec<Point>,
+    #[serde(default = "default_room_fill_color")]
+    pub fill_color: [u8; 3],
+    #[serde(default = "default_true")]
+    pub fill_visible: bool,
+    #[serde(default)]
+    pub locked: bool,
+}
+
+impl Room {
+    pub fn area_square_centimeters(&self) -> f32 {
+        polygon_area(&self.points)
+    }
+
+    pub fn perimeter_centimeters(&self) -> f32 {
+        if self.points.len() < 2 {
+            return 0.0;
+        }
+        self.points
+            .iter()
+            .zip(self.points.iter().cycle().skip(1))
+            .take(self.points.len())
+            .map(|(a, b)| a.distance(*b))
+            .sum()
+    }
+}
+
+pub fn default_room_fill_color() -> [u8; 3] {
+    [220, 230, 239]
+}
+
+fn polygon_area(points: &[Point]) -> f32 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .take(points.len())
+        .map(|(a, b)| a.x * b.y - b.x * a.y)
+        .sum::<f32>()
+        .abs()
+        * 0.5
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -377,17 +576,7 @@ pub struct AreaShape {
 
 impl AreaShape {
     pub fn area_square_centimeters(&self) -> f32 {
-        if self.points.len() < 3 {
-            return 0.0;
-        }
-        self.points
-            .iter()
-            .zip(self.points.iter().cycle().skip(1))
-            .take(self.points.len())
-            .map(|(a, b)| a.x * b.y - b.x * a.y)
-            .sum::<f32>()
-            .abs()
-            * 0.5
+        polygon_area(&self.points)
     }
 }
 
@@ -499,6 +688,9 @@ pub struct Snapshot {
     pub areas: Vec<AreaShape>,
     pub compasses: Vec<CompassRose>,
     pub arrows: Vec<PlanArrow>,
+    pub rooms: Vec<Room>,
+    pub layers: Vec<Layer>,
+    pub layer_assignments: Vec<LayerAssignment>,
     pub assets: Arc<Vec<ProjectAsset>>,
 }
 
@@ -515,6 +707,9 @@ impl Snapshot {
             areas: plan.areas.clone(),
             compasses: plan.compasses.clone(),
             arrows: plan.arrows.clone(),
+            rooms: plan.rooms.clone(),
+            layers: plan.layers.clone(),
+            layer_assignments: plan.layer_assignments.clone(),
             assets: Arc::clone(assets),
         }
     }
@@ -530,6 +725,9 @@ impl Snapshot {
         plan.areas = self.areas;
         plan.compasses = self.compasses;
         plan.arrows = self.arrows;
+        plan.rooms = self.rooms;
+        plan.layers = self.layers;
+        plan.layer_assignments = self.layer_assignments;
         *assets = self.assets;
     }
 }

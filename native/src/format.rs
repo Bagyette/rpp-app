@@ -10,11 +10,12 @@ use miniz_oxide::inflate::decompress_to_vec_zlib;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AreaShape, ArrowStyle, CompassRose, Door, DoorKind, HingeSide, ImageObject, ObjectKind,
-    PlanArrow, PlanFile, PlanLine, PlanObject, Point, ProjectAsset, SwingSide, TextObject, Wall,
-    WallKind, Window, WindowKind, default_line_color, default_object_fill_color,
-    default_object_stroke_color, default_opening_color, default_text_color, default_wall_color,
-    default_wall_thickness, default_window_color,
+    AreaShape, ArrowStyle, CompassRose, Door, DoorKind, HingeSide, ImageObject, Layer,
+    LayerAssignment, ObjectKind, PlanArrow, PlanFile, PlanLine, PlanObject, Point, ProjectAsset,
+    Room, RoomKind, RoomSource, SwingSide, TextObject, Wall, WallKind, Window, WindowKind,
+    default_layers, default_line_color, default_object_fill_color, default_object_stroke_color,
+    default_opening_color, default_text_color, default_wall_color, default_wall_thickness,
+    default_window_color,
 };
 
 const TEXT_HEADER: &str = "RPP-PLAN 2";
@@ -230,6 +231,49 @@ fn encode_plan_data(plan: &PlanFile, assets: &[ProjectAsset]) -> Result<Vec<u8>,
         output.push('\n');
     }
 
+    output.push_str(
+        "\n# ROOM <id> <source> <type> <locked> <fill-visible> <fill-color> <x1> <y1> ...\n",
+    );
+    for room in &plan.rooms {
+        output.push_str(&format!(
+            "ROOM {} {} {} {} {} {}",
+            room.id,
+            room.source.as_str(),
+            room.kind.as_str(),
+            room.locked,
+            room.fill_visible,
+            color_hex(room.fill_color),
+        ));
+        for point in &room.points {
+            output.push_str(&format!(" {} {}", number(point.x), number(point.y)));
+        }
+        output.push('\n');
+        if !room.name.is_empty() {
+            let name = serde_json::to_string(&room.name).map_err(|_| FormatError::InvalidPlan)?;
+            output.push_str(&format!("ROOM_NAME {} {}\n", room.id, name));
+        }
+    }
+
+    output.push_str("\n# LAYER <id> <visible> <locked> <opacity> <JSON name>\n");
+    for layer in &plan.layers {
+        let name = serde_json::to_string(&layer.name).map_err(|_| FormatError::InvalidPlan)?;
+        output.push_str(&format!(
+            "LAYER {} {} {} {} {}\n",
+            layer.id,
+            layer.visible,
+            layer.locked,
+            number(layer.opacity),
+            name,
+        ));
+    }
+    output.push_str("\n# ASSIGN <item-id> <layer-id>\n");
+    for assignment in &plan.layer_assignments {
+        output.push_str(&format!(
+            "ASSIGN {} {}\n",
+            assignment.item_id, assignment.layer_id
+        ));
+    }
+
     output.push_str("\n# COMPASS <id> <x> <y> <size> <rotation> <locked> <color>\n");
     for compass in &plan.compasses {
         output.push_str(&format!(
@@ -372,7 +416,11 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
     for (index, raw_line) in text.lines().enumerate() {
         let line_number = index + 1;
         let trimmed = raw_line.trim();
-        let line = if trimmed.starts_with("TEXT ") {
+        let line = if trimmed.starts_with("TEXT ")
+            || trimmed.starts_with("OBJECT_NAME ")
+            || trimmed.starts_with("ROOM_NAME ")
+            || trimmed.starts_with("LAYER ")
+        {
             trimmed
         } else {
             trimmed.split('#').next().unwrap_or_default().trim()
@@ -480,9 +528,64 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
             continue;
         }
 
+        if line.starts_with("ROOM_NAME ") {
+            let Some(content_start) = line.find('"') else {
+                return syntax(line_number, "ROOM_NAME content must be a JSON string");
+            };
+            let metadata: Vec<&str> = line[..content_start].split_whitespace().collect();
+            let ["ROOM_NAME", id] = metadata.as_slice() else {
+                return syntax(
+                    line_number,
+                    "expected syntax: ROOM_NAME <room-id> <JSON string>",
+                );
+            };
+            let name = serde_json::from_str::<String>(&line[content_start..]).map_err(|_| {
+                FormatError::Syntax {
+                    line: line_number,
+                    message: "invalid ROOM_NAME JSON string".to_owned(),
+                }
+            })?;
+            let Some(room) = plan.rooms.iter_mut().find(|room| room.id == *id) else {
+                return syntax(line_number, "ROOM_NAME references an unknown room");
+            };
+            room.name = name;
+            continue;
+        }
+
+        if line.starts_with("LAYER ") {
+            let Some(content_start) = line.find('"') else {
+                return syntax(line_number, "LAYER name must be a JSON string");
+            };
+            let metadata: Vec<&str> = line[..content_start].split_whitespace().collect();
+            let ["LAYER", id, visible, locked, opacity] = metadata.as_slice() else {
+                return syntax(
+                    line_number,
+                    "expected syntax: LAYER <id> <visible> <locked> <opacity> <JSON name>",
+                );
+            };
+            let layer = Layer {
+                id: parse_id(id, line_number)?,
+                name: serde_json::from_str::<String>(&line[content_start..]).map_err(|_| {
+                    FormatError::Syntax {
+                        line: line_number,
+                        message: "invalid LAYER JSON string".to_owned(),
+                    }
+                })?,
+                visible: parse_bool(visible, line_number)?,
+                locked: parse_bool(locked, line_number)?,
+                opacity: parse_number(opacity, line_number)?,
+            };
+            if let Some(existing) = plan.layers.iter_mut().find(|item| item.id == layer.id) {
+                *existing = layer;
+            } else {
+                plan.layers.push(layer);
+            }
+            continue;
+        }
+
         if line.starts_with("AREA ") {
             let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() < 11 || (fields.len() - 5) % 2 != 0 {
+            if fields.len() < 11 || !(fields.len() - 5).is_multiple_of(2) {
                 return syntax(
                     line_number,
                     "expected syntax: AREA <id> <locked> <fill-color> <stroke-color> <x1> <y1> <x2> <y2> <x3> <y3> ...",
@@ -505,6 +608,34 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
             continue;
         }
 
+        if line.starts_with("ROOM ") {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() < 13 || !(fields.len() - 7).is_multiple_of(2) {
+                return syntax(
+                    line_number,
+                    "expected syntax: ROOM <id> <source> <type> <locked> <fill-visible> <fill-color> <x1> <y1> <x2> <y2> <x3> <y3> ...",
+                );
+            }
+            let mut points = Vec::with_capacity((fields.len() - 7) / 2);
+            for pair in fields[7..].chunks_exact(2) {
+                points.push(Point::new(
+                    parse_number(pair[0], line_number)?,
+                    parse_number(pair[1], line_number)?,
+                ));
+            }
+            plan.rooms.push(Room {
+                id: parse_id(fields[1], line_number)?,
+                name: String::new(),
+                source: parse_room_source(fields[2], line_number)?,
+                kind: parse_room_kind(fields[3], line_number)?,
+                locked: parse_bool(fields[4], line_number)?,
+                fill_visible: parse_bool(fields[5], line_number)?,
+                fill_color: parse_color(fields[6], line_number)?,
+                points,
+            });
+            continue;
+        }
+
         let fields: Vec<&str> = line.split_whitespace().collect();
         match fields.as_slice() {
             ["UNITS", unit] if !units_seen => {
@@ -519,6 +650,12 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
                     }
                 };
                 units_seen = true;
+            }
+            ["ASSIGN", item_id, layer_id] => {
+                plan.layer_assignments.push(LayerAssignment {
+                    item_id: parse_id(item_id, line_number)?,
+                    layer_id: parse_id(layer_id, line_number)?,
+                });
             }
             ["WALL", id, x1, y1, x2, y2] => {
                 plan.walls.push(Wall {
@@ -810,6 +947,15 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
                     "expected syntax: ARROW <id> <x> <y> <length> <width> <style> <orientation-step> <locked> <color>",
                 );
             }
+            ["ROOM", ..] => {
+                return syntax(line_number, "invalid ROOM instruction");
+            }
+            ["LAYER", ..] => {
+                return syntax(line_number, "invalid LAYER instruction");
+            }
+            ["ASSIGN", ..] => {
+                return syntax(line_number, "expected syntax: ASSIGN <item-id> <layer-id>");
+            }
             _ => return syntax(line_number, "unknown RPP instruction"),
         }
     }
@@ -938,6 +1084,10 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
         || plan.areas.len() > 100_000
         || plan.compasses.len() > 100_000
         || plan.arrows.len() > 100_000
+        || plan.rooms.len() > 100_000
+        || plan.layers.is_empty()
+        || plan.layers.len() > 1_000
+        || plan.layer_assignments.len() > 500_000
     {
         return Err(FormatError::InvalidPlan);
     }
@@ -952,7 +1102,8 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
             + plan.texts.len()
             + plan.areas.len()
             + plan.compasses.len()
-            + plan.arrows.len(),
+            + plan.arrows.len()
+            + plan.rooms.len(),
     );
     let mut wall_ids = HashSet::with_capacity(plan.walls.len());
     let mut wall_lengths = HashMap::with_capacity(plan.walls.len());
@@ -1123,6 +1274,43 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
             return Err(FormatError::InvalidPlan);
         }
     }
+    for room in &plan.rooms {
+        if !valid_id(&room.id)
+            || !object_ids.insert(room.id.as_str())
+            || room.name.len() > 512
+            || !(3..=10_000).contains(&room.points.len())
+            || room
+                .points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || room.area_square_centimeters() <= 0.0
+            || !room.perimeter_centimeters().is_finite()
+        {
+            return Err(FormatError::InvalidPlan);
+        }
+    }
+
+    let mut layer_ids = HashSet::with_capacity(plan.layers.len());
+    for layer in &plan.layers {
+        if !valid_id(&layer.id)
+            || !layer_ids.insert(layer.id.as_str())
+            || layer.name.is_empty()
+            || layer.name.len() > 256
+            || !layer.opacity.is_finite()
+            || !(0.0..=1.0).contains(&layer.opacity)
+        {
+            return Err(FormatError::InvalidPlan);
+        }
+    }
+    let mut assigned_items = HashSet::with_capacity(plan.layer_assignments.len());
+    for assignment in &plan.layer_assignments {
+        if !object_ids.contains(assignment.item_id.as_str())
+            || !layer_ids.contains(assignment.layer_id.as_str())
+            || !assigned_items.insert(assignment.item_id.as_str())
+        {
+            return Err(FormatError::InvalidPlan);
+        }
+    }
     Ok(())
 }
 
@@ -1254,6 +1442,29 @@ fn parse_object_kind(value: &str, line: usize) -> Result<ObjectKind, FormatError
     }
 }
 
+fn parse_room_source(value: &str, line: usize) -> Result<RoomSource, FormatError> {
+    match value {
+        "automatic" => Ok(RoomSource::Automatic),
+        "manual" => Ok(RoomSource::Manual),
+        _ => syntax(line, "room source must be automatic or manual"),
+    }
+}
+
+fn parse_room_kind(value: &str, line: usize) -> Result<RoomKind, FormatError> {
+    match value {
+        "custom" => Ok(RoomKind::Custom),
+        "living-room" => Ok(RoomKind::LivingRoom),
+        "bedroom" => Ok(RoomKind::Bedroom),
+        "kitchen" => Ok(RoomKind::Kitchen),
+        "bathroom" => Ok(RoomKind::Bathroom),
+        "hallway" => Ok(RoomKind::Hallway),
+        "office" => Ok(RoomKind::Office),
+        "garage" => Ok(RoomKind::Garage),
+        "storage" => Ok(RoomKind::Storage),
+        _ => syntax(line, "unknown room type"),
+    }
+}
+
 fn parse_arrow_style(value: &str, line: usize) -> Result<ArrowStyle, FormatError> {
     match value {
         "open" => Ok(ArrowStyle::Open),
@@ -1309,6 +1520,12 @@ fn scale_plan(plan: &mut PlanFile, factor: f32) {
     }
     for area in &mut plan.areas {
         for point in &mut area.points {
+            point.x *= factor;
+            point.y *= factor;
+        }
+    }
+    for room in &mut plan.rooms {
+        for point in &mut room.points {
             point.x *= factor;
             point.y *= factor;
         }
@@ -1442,6 +1659,9 @@ impl LegacyPlanFile {
             areas: Vec::new(),
             compasses: Vec::new(),
             arrows: Vec::new(),
+            rooms: Vec::new(),
+            layers: default_layers(),
+            layer_assignments: Vec::new(),
         }
     }
 }
@@ -1545,6 +1765,35 @@ mod tests {
                 color: [52, 56, 59],
                 locked: false,
             }],
+            rooms: vec![Room {
+                id: "test-room".to_owned(),
+                name: "Office #1".to_owned(),
+                kind: RoomKind::Office,
+                source: RoomSource::Manual,
+                points: vec![
+                    Point::new(20.0, 300.0),
+                    Point::new(220.0, 300.0),
+                    Point::new(220.0, 420.0),
+                    Point::new(20.0, 420.0),
+                ],
+                fill_color: [220, 230, 239],
+                fill_visible: true,
+                locked: false,
+            }],
+            layers: vec![
+                Layer::default(),
+                Layer {
+                    id: "furniture".to_owned(),
+                    name: "Furniture".to_owned(),
+                    visible: true,
+                    locked: false,
+                    opacity: 0.8,
+                },
+            ],
+            layer_assignments: vec![LayerAssignment {
+                item_id: "test-object".to_owned(),
+                layer_id: "furniture".to_owned(),
+            }],
         }
     }
 
@@ -1578,14 +1827,47 @@ mod tests {
             r##"TEXT test-text 200 140 18 -10 false b42846 true "Color #f4efe6\nLiving room""##
         ));
         assert!(text.contains("AREA test-area false d6e6d2 466e46"));
+        assert!(text.contains("ROOM test-room manual office false true dce6ef"));
+        assert!(text.contains("ROOM_NAME test-room \"Office #1\""));
+        assert!(text.contains("LAYER furniture true false 0.8 \"Furniture\""));
+        assert!(text.contains("ASSIGN test-object furniture"));
         assert!(text.contains("COMPASS test-compass 300 160 80 15 false 34383b"));
         assert!(text.contains("OBJECT_NAME test-object \"Custom table\""));
         assert!(text.contains("ARROW test-arrow 40 240 100 20 solid 9 false 34383b"));
     }
 
     #[test]
+    fn object_names_preserve_hash_characters() {
+        let input = "\
+RPP-PLAN 2
+UNITS cm
+OBJECT object-1 rectangle 10 20 100 60 0 false e4e6e5 666666
+OBJECT_NAME object-1 \"Desk #1\"
+";
+        let (plan, _) = decode_text(input).expect("object name with hash");
+
+        assert_eq!(plan.objects[0].name, "Desk #1");
+    }
+
+    #[test]
+    fn arbitrary_small_inputs_never_panic_the_decoder() {
+        let mut state = 0x6d2b_79f5_u32;
+        for length in 0..512 {
+            let mut input = vec![0_u8; length];
+            for byte in &mut input {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                *byte = state as u8;
+            }
+            let result = std::panic::catch_unwind(|| decode_plan(&input));
+            assert!(result.is_ok(), "decoder panicked for {length} random bytes");
+        }
+    }
+
+    #[test]
     fn documented_complete_example_stays_parseable() {
-        let documentation = include_str!("../../FORMAT_RPP.md");
+        let documentation = include_str!("../../RPP_FORMAT.md");
         let section = documentation
             .split("## 3. Complete example")
             .nth(1)
@@ -1601,6 +1883,9 @@ mod tests {
         assert_eq!(plan.doors.len(), 1);
         assert_eq!(plan.windows.len(), 1);
         assert_eq!(plan.arrows.len(), 1);
+        assert_eq!(plan.rooms.len(), 1);
+        assert_eq!(plan.layers.len(), 2);
+        assert_eq!(plan.layer_assignments.len(), 1);
         assert_eq!(assets.len(), 1);
         assert_eq!(plan.images.len(), 2);
     }
@@ -1666,6 +1951,9 @@ mod tests {
         expected.compasses.clear();
         expected.objects.clear();
         expected.arrows.clear();
+        expected.rooms.clear();
+        expected.layers = default_layers();
+        expected.layer_assignments.clear();
         let legacy = LegacyPlanFile {
             version: 1,
             walls: vec![LegacyWall {

@@ -199,7 +199,47 @@ fn build_scene(
     )
     .unwrap();
 
+    for room in &plan.rooms {
+        if !plan.item_visible(&room.id) {
+            continue;
+        }
+        write!(svg, r#"<polygon points=""#).unwrap();
+        for point in &room.points {
+            write!(svg, "{:.3},{:.3} ", point.x, point.y).unwrap();
+        }
+        let opacity = plan.item_opacity(&room.id);
+        writeln!(
+            svg,
+            r##"" fill="{}" fill-opacity="{:.3}" stroke="#3c698c" stroke-opacity="{:.3}" stroke-width="1"/>"##,
+            svg_color(room.fill_color),
+            if room.fill_visible { 0.31 * opacity } else { 0.0 },
+            0.7 * opacity,
+        )
+        .unwrap();
+        let center = crate::room_detection::polygon_center(&room.points);
+        let title = if room.name.trim().is_empty() {
+            localizer.text("room.default_name")
+        } else {
+            room.name.trim().to_owned()
+        };
+        writeln!(
+            svg,
+            r##"<text x="{:.3}" y="{:.3}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#3c698c"><tspan x="{:.3}" dy="0">{}</tspan><tspan x="{:.3}" dy="14">{:.2} m²</tspan></text>"##,
+            center.x,
+            center.y - 7.0,
+            center.x,
+            escape_xml(&title),
+            center.x,
+            room.area_square_centimeters() / 10_000.0,
+        )
+        .unwrap();
+    }
+
     for area in &plan.areas {
+        if !plan.item_visible(&area.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&area.id)).unwrap();
         write!(svg, r#"<polygon points=""#).unwrap();
         for point in &area.points {
             write!(svg, "{:.3},{:.3} ", point.x, point.y).unwrap();
@@ -220,9 +260,13 @@ fn build_scene(
             area.area_square_centimeters() / 10_000.0
         )
         .unwrap();
+        svg.push_str("</g>\n");
     }
 
     for image in &plan.images {
+        if !plan.item_visible(&image.id) {
+            continue;
+        }
         let bytes: &[u8] = if image.asset_id == "builtin-emergency-exit" {
             include_bytes!("../assets/library/emergency-exit.png")
         } else if let Some(asset) = assets.iter().find(|asset| asset.id == image.asset_id) {
@@ -241,6 +285,7 @@ fn build_scene(
             continue;
         }
         let encoded = STANDARD.encode(png);
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&image.id)).unwrap();
         writeln!(
             svg,
             r#"<image x="{:.3}" y="{:.3}" width="{:.3}" height="{:.3}" preserveAspectRatio="none" transform="rotate({:.3} {:.3} {:.3})" href="data:image/png;base64,{}"/>"#,
@@ -254,9 +299,14 @@ fn build_scene(
             encoded
         )
         .unwrap();
+        svg.push_str("</g>\n");
     }
 
     for object in &plan.objects {
+        if !plan.item_visible(&object.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&object.id)).unwrap();
         let points = rotated_rectangle(
             object.x,
             object.y,
@@ -292,9 +342,14 @@ fn build_scene(
             escape_xml(object.display_name(&localizer.text(label_key)))
         )
         .unwrap();
+        svg.push_str("</g>\n");
     }
 
     for text in &plan.texts {
+        if !plan.item_visible(&text.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&text.id)).unwrap();
         for (index, line) in text.text.lines().enumerate() {
             let line_count = text.text.lines().count().max(1) as f32;
             let offset = (index as f32 - (line_count - 1.0) / 2.0) * text.size * 1.2;
@@ -313,8 +368,13 @@ fn build_scene(
             )
             .unwrap();
         }
+        svg.push_str("</g>\n");
     }
     for line in &plan.lines {
+        if !plan.item_visible(&line.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&line.id)).unwrap();
         write_line(
             &mut svg,
             line.start(),
@@ -322,9 +382,14 @@ fn build_scene(
             1.5,
             &svg_color(line.color),
         );
+        svg.push_str("</g>\n");
     }
 
     for wall in &plan.walls {
+        if !plan.item_visible(&wall.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&wall.id)).unwrap();
         writeln!(
             svg,
             r#"<line x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}" stroke="{}" stroke-width="{:.3}" stroke-linecap="square"/>"#,
@@ -336,14 +401,23 @@ fn build_scene(
             wall.thickness
         )
         .unwrap();
+        svg.push_str("</g>\n");
     }
 
     for door in &plan.doors {
+        if !plan.item_visible(&door.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&door.id)).unwrap();
         if let Some(wall) = plan.walls.iter().find(|wall| wall.id == door.wall_id) {
             write_door(&mut svg, door, wall);
         }
+        svg.push_str("</g>\n");
     }
     for window in &plan.windows {
+        if !plan.item_visible(&window.id) {
+            continue;
+        }
         let Some(wall) = plan.walls.iter().find(|wall| wall.id == window.wall_id) else {
             continue;
         };
@@ -351,6 +425,7 @@ fn build_scene(
         if length <= f32::EPSILON {
             continue;
         }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&window.id)).unwrap();
         let ux = (wall.x2 - wall.x1) / length;
         let uy = (wall.y2 - wall.y1) / length;
         let center = wall.point_at(window.t);
@@ -378,9 +453,19 @@ fn build_scene(
                 &svg_color(window.color),
             );
         }
+        svg.push_str("</g>\n");
     }
 
     for compass in &plan.compasses {
+        if !plan.item_visible(&compass.id) {
+            continue;
+        }
+        writeln!(
+            svg,
+            r#"<g opacity="{:.3}">"#,
+            plan.item_opacity(&compass.id)
+        )
+        .unwrap();
         let radius = compass.size * 0.5;
         let color = svg_color(compass.color);
         writeln!(
@@ -410,9 +495,14 @@ fn build_scene(
             color
         )
         .unwrap();
+        svg.push_str("</g>\n");
     }
 
     for arrow in &plan.arrows {
+        if !plan.item_visible(&arrow.id) {
+            continue;
+        }
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&arrow.id)).unwrap();
         let start = Point::new(arrow.x, arrow.y);
         let end = arrow.end();
         let angle = arrow.angle_degrees().to_radians();
@@ -466,14 +556,19 @@ fn build_scene(
                 .unwrap();
             }
         }
+        svg.push_str("</g>\n");
     }
 
     if include_distances {
         for wall in &plan.walls {
-            write_distance_label(&mut svg, wall.start(), wall.end(), wall.length());
+            if plan.item_visible(&wall.id) {
+                write_distance_label(&mut svg, wall.start(), wall.end(), wall.length());
+            }
         }
         for line in &plan.lines {
-            write_distance_label(&mut svg, line.start(), line.end(), line.length());
+            if plan.item_visible(&line.id) {
+                write_distance_label(&mut svg, line.start(), line.end(), line.length());
+            }
         }
     }
 
@@ -696,14 +791,23 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         });
     };
     for wall in &plan.walls {
+        if !plan.item_visible(&wall.id) {
+            continue;
+        }
         include(wall.start());
         include(wall.end());
     }
     for line in &plan.lines {
+        if !plan.item_visible(&line.id) {
+            continue;
+        }
         include(line.start());
         include(line.end());
     }
     for object in &plan.objects {
+        if !plan.item_visible(&object.id) {
+            continue;
+        }
         for point in rotated_rectangle(
             object.x,
             object.y,
@@ -715,28 +819,51 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for image in &plan.images {
+        if !plan.item_visible(&image.id) {
+            continue;
+        }
         for point in rotated_rectangle(image.x, image.y, image.width, image.height, image.rotation)
         {
             include(point);
         }
     }
     for text in &plan.texts {
+        if !plan.item_visible(&text.id) {
+            continue;
+        }
         let (width, height) = text_dimensions(text);
         for point in rotated_rectangle(text.x, text.y, width, height, text.rotation) {
             include(point);
         }
     }
     for area in &plan.areas {
+        if !plan.item_visible(&area.id) {
+            continue;
+        }
         for point in &area.points {
             include(*point);
         }
     }
+    for room in &plan.rooms {
+        if !plan.item_visible(&room.id) {
+            continue;
+        }
+        for point in &room.points {
+            include(*point);
+        }
+    }
     for compass in &plan.compasses {
+        if !plan.item_visible(&compass.id) {
+            continue;
+        }
         let radius = compass.size * 0.6;
         include(Point::new(compass.x - radius, compass.y - radius));
         include(Point::new(compass.x + radius, compass.y + radius));
     }
     for arrow in &plan.arrows {
+        if !plan.item_visible(&arrow.id) {
+            continue;
+        }
         let end = arrow.end();
         let radius = arrow.width.max(2.0);
         include(Point::new(arrow.x - radius, arrow.y - radius));
@@ -745,6 +872,9 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         include(Point::new(end.x + radius, end.y + radius));
     }
     for door in &plan.doors {
+        if !plan.item_visible(&door.id) {
+            continue;
+        }
         let Some(wall) = plan.walls.iter().find(|wall| wall.id == door.wall_id) else {
             continue;
         };
