@@ -68,10 +68,6 @@ What already works:
 - English, French and Spanish;
 - Light, Dark and Warm Dark themes.
 
-The detailed feature list and planned work live in
-[ROADMAP_RPP_FINAL.md](ROADMAP_RPP_FINAL.md). That file distinguishes what is
-implemented from what is only planned.
-
 ## Main shortcuts
 
 | Action | Shortcut |
@@ -178,13 +174,6 @@ checked manually because unit tests do not catch canvas and menu bugs.
 For a useful bug report, include the RPP and Windows versions, the steps that
 trigger the problem, and what should have happened. A screenshot or a small
 `.rpp` file helps a lot for geometry and rendering problems.
-
-## Documentation
-
-- [RPP-PLAN and the `.rpp` container](RPP_FORMAT.md)
-- [Localization](LOCALIZATION.md)
-- [Roadmap](ROADMAP_RPP_FINAL.md)
-- [Changes by version](CHANGELOG.md)
 
 ## License
 
