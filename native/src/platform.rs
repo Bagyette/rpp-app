@@ -3,21 +3,45 @@
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
+#[cfg(target_os = "windows")]
+use directories::BaseDirs;
+#[cfg(not(target_os = "windows"))]
 use directories::ProjectDirs;
 use eframe::egui::FontData;
 use resvg::usvg::fontdb::{Database, Family, Query, Weight};
 
-fn project_dirs() -> Option<ProjectDirs> {
-    // Empty organization/qualifier preserves the original Windows LocalAppData/RPP directory.
-    ProjectDirs::from("", "", "RPP")
+struct StorageDirectories {
+    config: PathBuf,
+    recovery: PathBuf,
+}
+
+fn storage_directories() -> Option<StorageDirectories> {
+    #[cfg(target_os = "windows")]
+    {
+        // ProjectDirs adds config/data subfolders on Windows. Preserve the original
+        // flat LocalAppData/RPP layout so upgrades retain settings and recovery.
+        let directory = BaseDirs::new()?.data_local_dir().join("RPP");
+        Some(StorageDirectories {
+            config: directory.clone(),
+            recovery: directory,
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let directories = ProjectDirs::from("", "", "RPP")?;
+        Some(StorageDirectories {
+            config: directories.config_local_dir().to_path_buf(),
+            recovery: directories.data_local_dir().to_path_buf(),
+        })
+    }
 }
 
 pub fn config_file(name: &str) -> Option<PathBuf> {
-    project_dirs().map(|dirs| dirs.config_local_dir().join(name))
+    storage_directories().map(|directories| directories.config.join(name))
 }
 
 pub fn recovery_file() -> Option<PathBuf> {
-    project_dirs().map(|dirs| dirs.data_local_dir().join("autosave.rpp"))
+    storage_directories().map(|directories| directories.recovery.join("autosave.rpp"))
 }
 
 pub fn font_database() -> Arc<Database> {
@@ -84,7 +108,14 @@ mod tests {
         assert_eq!(settings.file_name().expect("filename"), "settings.json");
         assert_eq!(recovery.file_name().expect("filename"), "autosave.rpp");
         #[cfg(target_os = "windows")]
-        assert_eq!(settings.parent(), recovery.parent());
+        {
+            let legacy = directories::BaseDirs::new()
+                .expect("Windows user directories")
+                .data_local_dir()
+                .join("RPP");
+            assert_eq!(settings.parent(), Some(legacy.as_path()));
+            assert_eq!(recovery.parent(), Some(legacy.as_path()));
+        }
         #[cfg(target_os = "macos")]
         assert!(
             settings
