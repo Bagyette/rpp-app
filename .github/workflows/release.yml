@@ -1,0 +1,124 @@
+name: Test, build and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}-${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            platform: windows
+            architecture: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            architecture: x64
+          - runner: macos-15
+            platform: macos
+            architecture: arm64
+          - runner: macos-15-intel
+            platform: macos
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux development libraries and fonts
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-xcb-dev libegl1-mesa-dev libgl1-mesa-dev libdbus-1-dev libfontconfig1-dev fonts-liberation fonts-dejavu-core
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Check code quality
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run regression tests
+        run: cargo test --locked
+      - name: Build optimized executable
+        run: cargo build --release --locked
+      - name: Package native application
+        working-directory: .
+        run: python scripts/package_release.py --platform ${{ matrix.platform }} --architecture ${{ matrix.architecture }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpp-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish new version after all platforms pass
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rpp-*
+          path: dist
+          merge-multiple: true
+      - name: Publish version and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+          import tomllib
+
+          version = tomllib.loads(Path("native/Cargo.toml").read_text())["package"]["version"]
+          tag = f"v{version}"
+          releases = subprocess.check_output([
+              "gh", "api", "--paginate", f"repos/{os.environ['GH_REPO']}/releases",
+              "--jq", ".[].tag_name",
+          ], text=True).splitlines()
+          if tag in releases:
+              print(f"{tag} is already published; leaving its assets unchanged.")
+              raise SystemExit(0)
+          assets = sorted(path for path in Path("dist").iterdir() if path.is_file())
+          expected = {
+              f"RPP-{version}-windows-x64.exe", f"RPP-{version}-linux-x64.tar.gz",
+              f"RPP-{version}-macos-arm64.zip", f"RPP-{version}-macos-x64.zip",
+          }
+          if {path.name for path in assets} != expected:
+              raise SystemExit("Missing or unexpected release assets")
+          checksums = Path("dist/SHA256SUMS.txt")
+          checksums.write_text("".join(
+              f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in assets
+          ))
+          subprocess.run([
+              "gh", "release", "create", tag, "--target", os.environ["GITHUB_SHA"],
+              "--title", f"RPP {version}", "--notes-file", "RELEASE_NOTES.md",
+              *map(str, assets), str(checksums),
+          ], check=True)
+          PY

@@ -1,4 +1,4 @@
-use super::*;
+use super::{DEFAULT_LAYER_ID, Layer, RppApp, Selection, Ui, egui, make_id, property_row};
 
 impl RppApp {
     pub(super) fn assign_to_active_layer(&mut self, item_id: &str) {

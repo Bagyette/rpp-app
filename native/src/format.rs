@@ -1,10 +1,8 @@
-use std::{
-    collections::{HashMap, HashSet},
-    error::Error,
-    fmt,
-    io::{Cursor, Read, Write},
-    str::{self, FromStr},
-};
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::io::{Cursor, Read, Write};
+use std::str::FromStr;
+use std::{fmt, str};
 
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 use serde::{Deserialize, Serialize};
@@ -592,7 +590,7 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
                 );
             }
             let mut points = Vec::with_capacity((fields.len() - 5) / 2);
-            for pair in fields[5..].chunks_exact(2) {
+            for pair in fields[5..].as_chunks::<2>().0 {
                 points.push(Point::new(
                     parse_number(pair[0], line_number)?,
                     parse_number(pair[1], line_number)?,
@@ -617,7 +615,7 @@ fn decode_text(text: &str) -> Result<(PlanFile, Vec<AssetDescriptor>), FormatErr
                 );
             }
             let mut points = Vec::with_capacity((fields.len() - 7) / 2);
-            for pair in fields[7..].chunks_exact(2) {
+            for pair in fields[7..].as_chunks::<2>().0 {
                 points.push(Point::new(
                     parse_number(pair[0], line_number)?,
                     parse_number(pair[1], line_number)?,

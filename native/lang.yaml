@@ -4,6 +4,10 @@ languages:
     name: English (US)
     strings:
       app.ready: Ready
+      navigation.scroll: Scrolling
+      navigation.auto: Automatic (trackpad / wheel)
+      navigation.pan: Always pan
+      navigation.zoom: Always zoom
       app.restored: Autosaved plan restored
       app.title: RPP — Ran Plan Plan
       action.new: New
@@ -216,9 +220,9 @@ languages:
       export.pdf_does_not_fit: "The plan does not fit on the selected page at 1:{scale}. Choose a larger scale denominator."
       hint.undo: "Ctrl+Z: undo"
       hint.redo: "Ctrl+Y: redo"
-      hint.pan: "Middle mouse: pan"
-      hint.zoom: "Wheel: zoom"
-      hint.fit_plan: "Fit the complete plan · Home"
+      hint.pan: "Two fingers / middle / Space+drag: pan"
+      hint.zoom: "Pinch / wheel: zoom"
+      hint.fit_plan: "Fit the plan · Home / Ctrl+0"
       hint.first_wall: Draw your first wall
       hint.first_wall_detail: Click successive points on the grid.
       status.counts: "{walls} wall{wall_suffix} · {rooms} room{room_suffix} · {doors} door{door_suffix} · {windows} window{window_suffix} · {objects} object{object_suffix}"
@@ -299,6 +303,10 @@ languages:
     name: Français
     strings:
       app.ready: Prêt
+      navigation.scroll: Défilement
+      navigation.auto: Automatique (trackpad / molette)
+      navigation.pan: Toujours déplacer
+      navigation.zoom: Toujours zoomer
       app.restored: Plan restauré automatiquement
       app.title: RPP — Ran Plan Plan
       action.new: Nouveau
@@ -511,9 +519,9 @@ languages:
       export.pdf_does_not_fit: "Le plan ne tient pas sur la page choisie à l’échelle 1:{scale}. Choisissez un dénominateur plus grand."
       hint.undo: "Ctrl+Z : annuler"
       hint.redo: "Ctrl+Y : rétablir"
-      hint.pan: "Clic molette : déplacer"
-      hint.zoom: "Molette : zoom"
-      hint.fit_plan: "Afficher tout le plan · Début"
+      hint.pan: "Deux doigts / molette / Espace+glisser : déplacer"
+      hint.zoom: "Pincement / molette : zoom"
+      hint.fit_plan: "Afficher le plan · Début / Ctrl+0"
       hint.first_wall: Tracez votre premier mur
       hint.first_wall_detail: Cliquez sur les sommets successifs de la grille.
       status.counts: "{walls} mur{wall_suffix} · {rooms} pièce{room_suffix} · {doors} porte{door_suffix} · {windows} fenêtre{window_suffix} · {objects} objet{object_suffix}"
@@ -594,6 +602,10 @@ languages:
     name: Español
     strings:
       app.ready: Listo
+      navigation.scroll: Desplazamiento
+      navigation.auto: Automático (panel táctil / rueda)
+      navigation.pan: Siempre desplazar
+      navigation.zoom: Siempre ampliar
       app.restored: Plano autoguardado restaurado
       app.title: RPP — Ran Plan Plan
       action.new: Nuevo
@@ -833,9 +845,9 @@ languages:
       export.pdf_does_not_fit: "El plano no cabe en la página elegida a escala 1:{scale}. Elige un denominador mayor."
       hint.undo: "Ctrl+Z: deshacer"
       hint.redo: "Ctrl+Y: rehacer"
-      hint.pan: "Botón central: desplazar"
-      hint.zoom: "Rueda: zoom"
-      hint.fit_plan: Ajustar todo el plano · Inicio
+      hint.pan: "Dos dedos / central / Espacio+arrastrar: mover"
+      hint.zoom: "Pellizco / rueda: zoom"
+      hint.fit_plan: Ajustar plano · Inicio / Ctrl+0
       hint.first_wall: Dibuja tu primer muro
       hint.first_wall_detail: Haz clic en puntos sucesivos de la cuadrícula.
       status.counts: "{walls} muro{wall_suffix} · {rooms} habitación{room_suffix} · {doors} puerta{door_suffix} · {windows} ventana{window_suffix} · {objects} objeto{object_suffix}"

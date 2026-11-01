@@ -1,10 +1,16 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+#![forbid(unsafe_code)]
 
 mod app;
 mod export;
 mod format;
+mod input;
 mod localization;
 mod model;
+mod platform;
 mod room_detection;
 
 use app::RppApp;

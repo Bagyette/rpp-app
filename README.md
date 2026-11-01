@@ -1,6 +1,6 @@
 # RPP - Ran Plan Plan
 
-RPP is a small 2D floor-plan editor for Windows. I started it after failing to
+RPP is a small native 2D floor-plan editor for Windows, macOS and Linux. I started it after failing to
 find an open-source program that was easy to learn without being limited to
 four lines and a prayer.
 
@@ -9,33 +9,58 @@ deliberate limit: RPP is for drawing a usable plan without first learning a
 professional architecture suite.
 
 The application is written in Rust with egui. It is native, works offline and
-ships as one portable `.exe`. There is no Electron bundle, installer, account
+ships as a portable Windows executable, a macOS application, or a Linux binary.
+There is no Electron bundle, account
 or telemetry.
 
-Current version: **0.8.0**. Expect missing tools and occasional rough edges
+Current version: **0.9.0**. Expect missing tools and occasional rough edges
 while the editor is still below 1.0.
 
 ## Download
 
-Windows builds are published on the
-[Releases page](https://github.com/Bagyette/rpp-app/releases/latest).
+Native builds are published on the
+[Releases page](https://github.com/Bagyette/rpp-app/releases/latest):
 
-Download `RPP-Native-0.8.0.exe` and run it directly. Windows SmartScreen may
-warn about the file because development builds are not signed.
+| System | Download |
+|---|---|
+| Windows 10/11, x64 | `RPP-0.9.0-windows-x64.exe` |
+| macOS, Apple Silicon | `RPP-0.9.0-macos-arm64.zip` |
+| macOS, Intel | `RPP-0.9.0-macos-x64.zip` |
+| Linux, x64 | `RPP-0.9.0-linux-x64.tar.gz` |
 
-Preferences and recovery files are kept in `%LOCALAPPDATA%\RPP\`:
+On Windows, run the executable directly. On macOS, extract `RPP.app` and place
+it in Applications or your user Applications folder. On Linux, extract the
+archive and run `./rpp`. The Linux binary is built on Ubuntu 24.04; it requires
+compatible system libraries, including glibc 2.39 or later, OpenGL/EGL, X11 or
+Wayland, and fontconfig. It is not a statically linked universal Linux package.
+Native Linux file dialogs require a working desktop portal or `zenity`.
 
-```text
-autosave.rpp
-language.txt
-settings.json
-```
+Windows builds are unsigned. macOS builds have an ad-hoc signature and are not
+Apple notarized, so the operating system may require approval before opening.
+`SHA256SUMS.txt` contains checksums for all four downloads.
+
+Preferences and recovery files use each operating system's user directories:
+
+| System | Preferences (`settings.json`, `language.txt`) | Recovery (`autosave.rpp`) |
+|---|---|---|
+| Windows | `%LOCALAPPDATA%\RPP\` | Same directory |
+| macOS | `~/Library/Application Support/RPP/` | Same directory |
+| Linux | `$XDG_CONFIG_HOME/rpp/` (default `~/.config/rpp/`) | `$XDG_DATA_HOME/rpp/` (default `~/.local/share/rpp/`) |
+
+Existing Windows preferences remain in their original location. Recovered
+plans are marked as unsaved. Project files remain portable between systems.
 
 ## The first five minutes
 
 Pick a tool on the left, draw on the canvas, then edit the selected item from
 the Properties panel. The mouse wheel zooms and the middle mouse button moves
-the view.
+the view. Trackpad scrolling pans; pinching zooms around the pointer when the
+windowing backend supplies pinch events. Space + left-drag also pans, so a
+mouse with no middle button works. Shift + wheel pans horizontally, and
+Alt/Option + scrolling zooms. In Settings, scrolling can be forced to pan or
+zoom for devices that report ambiguous scroll events, such as some touch mice.
+Linux/Windows drivers that do not expose native pinch events can use modified
+scrolling, the keyboard shortcuts or the on-screen zoom controls.
 
 The wall tool accepts successive points, so a room outline can be drawn without
 restarting the tool after every segment. Doors and windows are placed directly
@@ -84,13 +109,20 @@ What already works:
 | Manual room boundary | `B` |
 | Compass rose | `N` |
 | Arrow | `Y` |
+| New / open | `Ctrl+N` / `Ctrl+O` |
 | Save | `Ctrl+S` |
 | Save as | `Ctrl+Shift+S` |
 | Select all | `Ctrl+A` |
 | Duplicate | `Ctrl+D` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
-| Fit the plan | `Home` |
+| Zoom in / out | `Ctrl++` / `Ctrl+-` |
+| Fit the plan | `Home` or `Ctrl+0` |
 | Cancel | `Escape` |
+
+Use `Command` (`⌘`) instead of `Ctrl` on macOS. Letter shortcuts follow the
+logical letter printed on the active keyboard layout (including AZERTY and
+QWERTY), not a fixed US key position. Text fields keep their own editing
+shortcuts; tool keys do not fire during typing or with command/Alt modifiers.
 
 Arrow keys move the current selection by 1 cm. Add `Shift` for a 10 cm step.
 `Delete` and `Backspace` remove the selection.
@@ -129,16 +161,40 @@ Keep backups of important plans.
 
 ## Build from source
 
-The build currently targets Windows 10 and 11. Install a stable Rust toolchain
-with the MSVC target, then run:
+Install stable Rust (1.92 or later). Windows requires the MSVC C++ build tools;
+macOS requires the Xcode Command Line Tools. On Debian/Ubuntu, install:
 
-```powershell
-cd native
-cargo test
-cargo build --release
+```sh
+sudo apt-get install pkg-config libxkbcommon-dev libwayland-dev libx11-xcb-dev \
+  libegl1-mesa-dev libgl1-mesa-dev libdbus-1-dev libfontconfig1-dev \
+  fonts-liberation fonts-dejavu-core
 ```
 
-The executable is written to `native\target\release\rpp.exe`.
+Then, on any supported operating system:
+
+```sh
+cd native
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --release --locked
+```
+
+The executable is written to `native/target/release/rpp` (`rpp.exe` on Windows).
+`rpp path/to/project.rpp` opens a project; dropping a file into the window also
+opens it, with a confirmation if the current plan has unsaved edits.
+
+To package a macOS app locally, run from the repository root:
+
+```sh
+python3 scripts/package_release.py --platform macos --architecture arm64
+```
+
+Use `x64` for an Intel Mac. The same script accepts `windows` and `linux`.
+GitHub Actions runs formatting, Clippy, tests and release builds on all four
+platform/architecture combinations. On `main`, a new version in `Cargo.toml`
+is published only after all jobs pass; an existing release is left unchanged.
+See [STYLE.md](STYLE.md) for code conventions and the Google Rust style review.
 
 The release profile favors a small binary: size optimization, fat LTO, one code
 generation unit and stripped symbols are enabled in `Cargo.toml`.
@@ -156,7 +212,9 @@ native/
     ├── export.rs            SVG, PNG and PDF export
     ├── format.rs            .rpp reader and writer
     ├── localization.rs      language catalog
-    ├── main.rs              application entry point
+    ├── input.rs             logical shortcuts and canvas navigation
+├── platform.rs          user directories and system fonts
+├── main.rs              application entry point
     └── model.rs             saved project data
 ```
 
@@ -166,12 +224,12 @@ same keys.
 
 ## Tests and bug reports
 
-`cargo test` currently runs 47 tests. They cover project round trips, malformed
+`cargo test` covers the editor, input handling, project format and exports. They cover project round trips, malformed
 files, old formats, embedded assets, unit conversion, image processing,
 selection behavior and each export format. Release builds are also opened and
 checked manually because unit tests do not catch canvas and menu bugs.
 
-For a useful bug report, include the RPP and Windows versions, the steps that
+For a useful bug report, include the RPP and operating-system versions, the steps that
 trigger the problem, and what should have happened. A screenshot or a small
 `.rpp` file helps a lot for geometry and rendering problems.
 

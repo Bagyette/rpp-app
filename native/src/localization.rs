@@ -49,6 +49,15 @@ impl Localizer {
     }
 
     pub fn text(&self, key: &str) -> String {
+        let text = self.raw_text(key);
+        if cfg!(target_os = "macos") {
+            text.replace("Ctrl+", "⌘+")
+        } else {
+            text
+        }
+    }
+
+    fn raw_text(&self, key: &str) -> String {
         self.catalog
             .languages
             .get(&self.current_language)

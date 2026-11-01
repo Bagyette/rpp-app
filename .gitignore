@@ -9,3 +9,6 @@ native/assets/icons/*-source.png
 .vscode/
 Thumbs.db
 .DS_Store
+
+dist/
+__pycache__/

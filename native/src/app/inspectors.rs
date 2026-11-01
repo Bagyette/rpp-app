@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    ACCENT, Alignment, ArrowStyle, BUILTIN_EMERGENCY_EXIT_ID, Color32, DoorKind, HingeSide,
+    MIN_WALL, Margin, ObjectKind, Panel, PlanArrow, RoomKind, RoomSource, RppApp, Selection, Sense,
+    Stroke, SwingSide, Ui, Unit, Vec2, Wall, WallKind, WindowKind, decode_image,
+    default_image_dimensions, distance_drag, egui, format_area, format_distance, property_row,
+};
 
 fn room_kind_key(kind: RoomKind) -> &'static str {
     match kind {
@@ -25,312 +30,292 @@ impl RppApp {
                     .inner_margin(Margin::same(15)),
             )
             .show(root, |ui| {
-                ui.heading(egui::RichText::new(self.localizer.text("panel.properties")).size(14.0));
+                egui::ScrollArea::vertical()
+                    .id_salt("inspector_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.inspector_contents(ui));
+            });
+    }
+
+    fn inspector_contents(&mut self, ui: &mut Ui) {
+        ui.heading(egui::RichText::new(self.localizer.text("panel.properties")).size(14.0));
+        ui.add_space(14.0);
+        if !self.additional_selections.is_empty() {
+            ui.label(
+                egui::RichText::new(self.localizer.format(
+                    "panel.multiple_selection",
+                    &[("count", (self.additional_selections.len() + 1).to_string())],
+                ))
+                .size(12.0)
+                .color(ACCENT),
+            );
+            ui.add_space(8.0);
+            let mut common_color = [52, 56, 59];
+            if property_row(ui, &self.localizer.text("property.color"), |ui| {
+                ui.color_edit_button_srgb(&mut common_color)
+            })
+            .changed()
+            {
+                self.set_selected_color(common_color);
+            }
+            ui.horizontal(|ui| {
+                if ui.button(self.localizer.text("action.lock_all")).clicked() {
+                    self.set_selected_locked(true);
+                }
+                if ui
+                    .button(self.localizer.text("action.unlock_all"))
+                    .clicked()
+                {
+                    self.set_selected_locked(false);
+                }
+            });
+            ui.add_space(6.0);
+            ui.label(self.localizer.text("panel.align"));
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(self.localizer.text("action.align_left"))
+                    .clicked()
+                {
+                    self.align_selected(Alignment::Left);
+                }
+                if ui
+                    .small_button(self.localizer.text("action.align_center"))
+                    .clicked()
+                {
+                    self.align_selected(Alignment::HorizontalCenter);
+                }
+                if ui
+                    .small_button(self.localizer.text("action.align_right"))
+                    .clicked()
+                {
+                    self.align_selected(Alignment::Right);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(self.localizer.text("action.align_top"))
+                    .clicked()
+                {
+                    self.align_selected(Alignment::Top);
+                }
+                if ui
+                    .small_button(self.localizer.text("action.align_middle"))
+                    .clicked()
+                {
+                    self.align_selected(Alignment::VerticalCenter);
+                }
+                if ui
+                    .small_button(self.localizer.text("action.align_bottom"))
+                    .clicked()
+                {
+                    self.align_selected(Alignment::Bottom);
+                }
+            });
+            ui.add_space(8.0);
+        }
+
+        if self.selection.is_some() && self.additional_selections.is_empty() {
+            self.selected_layer_selector(ui);
+        }
+
+        match self.selection.clone() {
+            Some(Selection::Wall(id)) => self.wall_inspector(ui, &id),
+            Some(Selection::Line(id)) => self.line_inspector(ui, &id),
+            Some(Selection::Text(id)) => self.text_inspector(ui, &id),
+            Some(Selection::Door(id)) => self.door_inspector(ui, &id),
+            Some(Selection::Image(id)) => self.image_inspector(ui, &id),
+            Some(Selection::Window(id)) => self.window_inspector(ui, &id),
+            Some(Selection::Object(id)) => self.object_inspector(ui, &id),
+            Some(Selection::Area(id)) => self.area_inspector(ui, &id),
+            Some(Selection::Room(id)) => self.room_inspector(ui, &id),
+            Some(Selection::Compass(id)) => self.compass_inspector(ui, &id),
+            Some(Selection::Arrow(id)) => self.arrow_inspector(ui, &id),
+            None => {
+                ui.label(
+                    egui::RichText::new(self.localizer.text("panel.empty_selection"))
+                        .size(12.0)
+                        .color(Color32::from_gray(120)),
+                );
                 ui.add_space(14.0);
-                if !self.additional_selections.is_empty() {
-                    ui.label(
-                        egui::RichText::new(self.localizer.format(
-                            "panel.multiple_selection",
-                            &[("count", (self.additional_selections.len() + 1).to_string())],
-                        ))
+                ui.label(
+                    egui::RichText::new(self.localizer.text("panel.display"))
+                        .strong()
                         .size(12.0)
                         .color(ACCENT),
-                    );
-                    ui.add_space(8.0);
-                    let mut common_color = [52, 56, 59];
-                    if property_row(ui, &self.localizer.text("property.color"), |ui| {
-                        ui.color_edit_button_srgb(&mut common_color)
+                );
+                let mut settings_changed =
+                    property_row(ui, &self.localizer.text("property.grid"), |ui| {
+                        ui.checkbox(&mut self.grid_visible, "")
                     })
-                    .changed()
-                    {
-                        self.set_selected_color(common_color);
+                    .changed();
+                settings_changed |= property_row(ui, &self.localizer.text("property.snap"), |ui| {
+                    ui.checkbox(&mut self.snap_enabled, "")
+                })
+                .changed();
+                let original_unit = self.unit;
+                property_row(ui, &self.localizer.text("property.unit"), |ui| {
+                    egui::ComboBox::from_id_salt("unit")
+                        .selected_text(self.unit.as_str())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.unit, Unit::Mm, "mm");
+                            ui.selectable_value(&mut self.unit, Unit::Cm, "cm");
+                            ui.selectable_value(&mut self.unit, Unit::M, "m");
+                            ui.selectable_value(&mut self.unit, Unit::In, "in");
+                            ui.selectable_value(&mut self.unit, Unit::Ft, "ft");
+                        })
+                        .response
+                });
+                settings_changed |= self.unit != original_unit;
+                let mut spacing = self.unit.display_from_centimeters(self.grid_size);
+                let spacing_response =
+                    property_row(ui, &self.localizer.text("property.spacing"), |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut spacing)
+                                .range(0.01..=50_000.0)
+                                .speed(1.0)
+                                .suffix(self.unit.suffix()),
+                        )
+                    });
+                if spacing_response.changed() {
+                    self.grid_size = self.unit.to_centimeters(spacing).clamp(0.1, 5000.0);
+                    settings_changed = true;
+                }
+                ui.collapsing(self.localizer.text("panel.defaults"), |ui| {
+                    ui.label(self.localizer.text("default.wall_thickness"));
+                    settings_changed |=
+                        distance_drag(ui, &mut self.default_wall_thickness, self.unit, 0.1, 500.0)
+                            .changed();
+                    ui.label(self.localizer.text("default.door_width"));
+                    settings_changed |=
+                        distance_drag(ui, &mut self.default_door_width, self.unit, 10.0, 1000.0)
+                            .changed();
+                    ui.label(self.localizer.text("default.window_width"));
+                    settings_changed |=
+                        distance_drag(ui, &mut self.default_window_width, self.unit, 10.0, 1000.0)
+                            .changed();
+                    ui.label(self.localizer.text("default.text_size"));
+                    settings_changed |=
+                        distance_drag(ui, &mut self.default_text_size, self.unit, 1.0, 500.0)
+                            .changed();
+                });
+                if settings_changed {
+                    self.persist_settings();
+                }
+                ui.add_space(18.0);
+                ui.label(
+                    egui::RichText::new(self.localizer.text("panel.image_library"))
+                        .strong()
+                        .size(12.0)
+                        .color(ACCENT),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if let Some(texture) = self.textures.get(BUILTIN_EMERGENCY_EXIT_ID) {
+                        ui.image((texture.id(), Vec2::splat(40.0)));
                     }
-                    ui.horizontal(|ui| {
-                        if ui.button(self.localizer.text("action.lock_all")).clicked() {
-                            self.set_selected_locked(true);
-                        }
-                        if ui.button(self.localizer.text("action.unlock_all")).clicked() {
-                            self.set_selected_locked(false);
+                    ui.vertical(|ui| {
+                        ui.label(self.localizer.text("library.emergency_exit"));
+                        ui.label(
+                            egui::RichText::new("40 × 40 cm · built-in")
+                                .size(10.0)
+                                .color(self.muted_text_color()),
+                        );
+                        if ui
+                            .small_button(self.localizer.text("action.place_image"))
+                            .clicked()
+                        {
+                            self.reuse_asset(BUILTIN_EMERGENCY_EXIT_ID);
                         }
                     });
-                    ui.add_space(6.0);
-                    ui.label(self.localizer.text("panel.align"));
-                    ui.horizontal(|ui| {
-                        if ui
-                            .small_button(self.localizer.text("action.align_left"))
-                            .clicked()
-                        {
-                            self.align_selected(Alignment::Left);
-                        }
-                        if ui
-                            .small_button(self.localizer.text("action.align_center"))
-                            .clicked()
-                        {
-                            self.align_selected(Alignment::HorizontalCenter);
-                        }
-                        if ui
-                            .small_button(self.localizer.text("action.align_right"))
-                            .clicked()
-                        {
-                            self.align_selected(Alignment::Right);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui
-                            .small_button(self.localizer.text("action.align_top"))
-                            .clicked()
-                        {
-                            self.align_selected(Alignment::Top);
-                        }
-                        if ui
-                            .small_button(self.localizer.text("action.align_middle"))
-                            .clicked()
-                        {
-                            self.align_selected(Alignment::VerticalCenter);
-                        }
-                        if ui
-                            .small_button(self.localizer.text("action.align_bottom"))
-                            .clicked()
-                        {
-                            self.align_selected(Alignment::Bottom);
-                        }
-                    });
-                    ui.add_space(8.0);
+                });
+                ui.separator();
+                if ui
+                    .button(self.localizer.text("action.import_image"))
+                    .clicked()
+                {
+                    self.import_image();
                 }
-
-                if self.selection.is_some() && self.additional_selections.is_empty() {
-                    self.selected_layer_selector(ui);
-                }
-
-                match self.selection.clone() {
-                    Some(Selection::Wall(id)) => self.wall_inspector(ui, &id),
-                    Some(Selection::Line(id)) => self.line_inspector(ui, &id),
-                    Some(Selection::Text(id)) => self.text_inspector(ui, &id),
-                    Some(Selection::Door(id)) => self.door_inspector(ui, &id),
-                    Some(Selection::Image(id)) => self.image_inspector(ui, &id),
-                    Some(Selection::Window(id)) => self.window_inspector(ui, &id),
-                    Some(Selection::Object(id)) => self.object_inspector(ui, &id),
-                    Some(Selection::Area(id)) => self.area_inspector(ui, &id),
-                    Some(Selection::Room(id)) => self.room_inspector(ui, &id),
-                    Some(Selection::Compass(id)) => self.compass_inspector(ui, &id),
-                    Some(Selection::Arrow(id)) => self.arrow_inspector(ui, &id),
-                    None => {
-                        ui.label(
-                            egui::RichText::new(self.localizer.text("panel.empty_selection"))
-                                .size(12.0)
-                                .color(Color32::from_gray(120)),
-                        );
-                        ui.add_space(14.0);
-                        ui.label(
-                            egui::RichText::new(self.localizer.text("panel.display"))
-                                .strong()
-                                .size(12.0)
-                                .color(ACCENT),
-                        );
-                        let mut settings_changed =
-                            property_row(ui, &self.localizer.text("property.grid"), |ui| {
-                                ui.checkbox(&mut self.grid_visible, "")
-                            })
-                            .changed();
-                        settings_changed |=
-                            property_row(ui, &self.localizer.text("property.snap"), |ui| {
-                                ui.checkbox(&mut self.snap_enabled, "")
-                            })
-                            .changed();
-                        let original_unit = self.unit;
-                        property_row(ui, &self.localizer.text("property.unit"), |ui| {
-                            egui::ComboBox::from_id_salt("unit")
-                                .selected_text(self.unit.as_str())
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.unit, Unit::Mm, "mm");
-                                    ui.selectable_value(&mut self.unit, Unit::Cm, "cm");
-                                    ui.selectable_value(&mut self.unit, Unit::M, "m");
-                                    ui.selectable_value(&mut self.unit, Unit::In, "in");
-                                    ui.selectable_value(&mut self.unit, Unit::Ft, "ft");
-                                })
-                                .response
-                        });
-                        settings_changed |= self.unit != original_unit;
-                        let mut spacing = self.unit.from_centimeters(self.grid_size);
-                        let spacing_response =
-                            property_row(ui, &self.localizer.text("property.spacing"), |ui| {
-                                ui.add(
-                                    egui::DragValue::new(&mut spacing)
-                                        .range(0.01..=50_000.0)
-                                        .speed(1.0)
-                                        .suffix(self.unit.suffix()),
-                                )
-                            });
-                        if spacing_response.changed() {
-                            self.grid_size = self.unit.to_centimeters(spacing).clamp(0.1, 5000.0);
-                            settings_changed = true;
+                let assets: Vec<(String, String, String, usize, u32, u32)> = self
+                    .assets
+                    .iter()
+                    .filter_map(|asset| {
+                        decode_image(&asset.bytes).ok().map(|(_, width, height)| {
+                            (
+                                asset.id.clone(),
+                                asset.name.clone(),
+                                asset.extension.clone(),
+                                asset.bytes.len(),
+                                width,
+                                height,
+                            )
+                        })
+                    })
+                    .collect();
+                for (asset_id, name, extension, bytes, width, height) in assets {
+                    ui.horizontal(|ui| {
+                        if let Some(texture) = self.textures.get(&asset_id) {
+                            let ratio = width as f32 / height.max(1) as f32;
+                            let size = if ratio >= 1.0 {
+                                Vec2::new(48.0, 48.0 / ratio)
+                            } else {
+                                Vec2::new(48.0 * ratio, 48.0)
+                            };
+                            ui.image((texture.id(), size));
                         }
-                        ui.collapsing(self.localizer.text("panel.defaults"), |ui| {
-                            ui.label(self.localizer.text("default.wall_thickness"));
-                            settings_changed |= distance_drag(
-                                ui,
-                                &mut self.default_wall_thickness,
-                                self.unit,
-                                0.1,
-                                500.0,
-                            )
-                            .changed();
-                            ui.label(self.localizer.text("default.door_width"));
-                            settings_changed |= distance_drag(
-                                ui,
-                                &mut self.default_door_width,
-                                self.unit,
-                                10.0,
-                                1000.0,
-                            )
-                            .changed();
-                            ui.label(self.localizer.text("default.window_width"));
-                            settings_changed |= distance_drag(
-                                ui,
-                                &mut self.default_window_width,
-                                self.unit,
-                                10.0,
-                                1000.0,
-                            )
-                            .changed();
-                            ui.label(self.localizer.text("default.text_size"));
-                            settings_changed |= distance_drag(
-                                ui,
-                                &mut self.default_text_size,
-                                self.unit,
-                                1.0,
-                                500.0,
-                            )
-                            .changed();
-                        });
-                        if settings_changed {
-                            self.persist_settings();
-                        }
-                        ui.add_space(18.0);
-                        ui.label(
-                            egui::RichText::new(self.localizer.text("panel.image_library"))
-                                .strong()
-                                .size(12.0)
-                                .color(ACCENT),
-                        );
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if let Some(texture) = self.textures.get(BUILTIN_EMERGENCY_EXIT_ID) {
-                                ui.image((texture.id(), Vec2::splat(40.0)));
-                            }
-                            ui.vertical(|ui| {
-                                ui.label(self.localizer.text("library.emergency_exit"));
-                                ui.label(
-                                    egui::RichText::new("40 × 40 cm · built-in")
-                                        .size(10.0)
-                                        .color(self.muted_text_color()),
-                                );
+                        ui.vertical(|ui| {
+                            ui.label(&name).on_hover_text(&name);
+                            let (placed_width, placed_height) =
+                                default_image_dimensions(width, height);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{extension} · {width}×{height}px · {:.1} KiB\n{:.1} × {:.1} cm",
+                                    bytes as f32 / 1024.0,
+                                    placed_width,
+                                    placed_height
+                                ))
+                                .size(9.5)
+                                .color(self.muted_text_color()),
+                            );
+                            ui.horizontal(|ui| {
                                 if ui
-                                    .small_button(self.localizer.text("action.place_image"))
+                                    .small_button("×")
+                                    .on_hover_text(
+                                        self.localizer.text("action.remove_asset"),
+                                    )
                                     .clicked()
                                 {
-                                    self.reuse_asset(BUILTIN_EMERGENCY_EXIT_ID);
+                                    self.remove_asset(&asset_id);
+                                }
+                                if ui
+                                    .small_button(
+                                        self.localizer.text("action.place_image"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.reuse_asset(&asset_id);
                                 }
                             });
                         });
-                        ui.separator();
-                        if ui
-                            .button(self.localizer.text("action.import_image"))
-                            .clicked()
-                        {
-                            self.import_image();
-                        }
-                        let assets: Vec<(String, String, String, usize, u32, u32)> = self
-                            .assets
-                            .iter()
-                            .filter_map(|asset| {
-                                decode_image(&asset.bytes).ok().map(|(_, width, height)| {
-                                    (
-                                        asset.id.clone(),
-                                        asset.name.clone(),
-                                        asset.extension.clone(),
-                                        asset.bytes.len(),
-                                        width,
-                                        height,
-                                    )
-                                })
-                            })
-                            .collect();
-                        for (asset_id, name, extension, bytes, width, height) in assets {
-                            ui.horizontal(|ui| {
-                                if let Some(texture) = self.textures.get(&asset_id) {
-                                    let ratio = width as f32 / height.max(1) as f32;
-                                    let size = if ratio >= 1.0 {
-                                        Vec2::new(48.0, 48.0 / ratio)
-                                    } else {
-                                        Vec2::new(48.0 * ratio, 48.0)
-                                    };
-                                    ui.image((texture.id(), size));
-                                }
-                                ui.vertical(|ui| {
-                                    ui.label(&name).on_hover_text(&name);
-                                    let (placed_width, placed_height) =
-                                        default_image_dimensions(width, height);
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{extension} · {width}×{height}px · {:.1} KiB\n{:.1} × {:.1} cm",
-                                            bytes as f32 / 1024.0,
-                                            placed_width,
-                                            placed_height
-                                        ))
-                                        .size(9.5)
-                                        .color(self.muted_text_color()),
-                                    );
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .small_button("×")
-                                            .on_hover_text(
-                                                self.localizer.text("action.remove_asset"),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.remove_asset(&asset_id);
-                                        }
-                                        if ui
-                                            .small_button(
-                                                self.localizer.text("action.place_image"),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.reuse_asset(&asset_id);
-                                        }
-                                    });
-                                });
-                            });
-                        }
-                    }
+                    });
                 }
+            }
+        }
 
-                ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-                    ui.add_space(20.0);
-                    ui.label(
-                        egui::RichText::new(self.localizer.text("hint.undo"))
-                            .size(11.0)
-                            .color(self.muted_text_color()),
-                    );
-                    ui.label(
-                        egui::RichText::new(self.localizer.text("hint.pan"))
-                            .size(11.0)
-                            .color(self.muted_text_color()),
-                    );
-                    ui.label(
-                        egui::RichText::new(self.localizer.text("hint.zoom"))
-                            .size(11.0)
-                            .color(self.muted_text_color()),
-                    );
-                    ui.label(
-                        egui::RichText::new(self.localizer.text("panel.navigation"))
-                            .strong()
-                            .size(11.0)
-                            .color(Color32::from_gray(80)),
-                    );
-                });
-            });
+        ui.add_space(20.0);
+        ui.separator();
+        ui.label(
+            egui::RichText::new(self.localizer.text("panel.navigation"))
+                .strong()
+                .size(11.0)
+                .color(self.muted_text_color()),
+        );
+        for key in ["hint.zoom", "hint.pan", "hint.undo"] {
+            ui.label(
+                egui::RichText::new(self.localizer.text(key))
+                    .size(11.0)
+                    .color(self.muted_text_color()),
+            );
+        }
     }
 
     fn line_inspector(&mut self, ui: &mut Ui, id: &str) {

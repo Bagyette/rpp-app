@@ -1,18 +1,17 @@
-use std::{fmt::Write as _, io::Cursor, path::Path};
+use std::fmt::Write as _;
+use std::io::Cursor;
+use std::path::Path;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use image::ImageFormat;
-use resvg::{
-    tiny_skia::{Pixmap, Transform},
-    usvg,
-};
+use resvg::tiny_skia::{Pixmap, Transform};
+use resvg::usvg;
 
-use crate::{
-    localization::Localizer,
-    model::{
-        ArrowStyle, Door, DoorKind, HingeSide, ObjectKind, PlanFile, Point, ProjectAsset,
-        SwingSide, Wall, WindowKind,
-    },
+use crate::localization::Localizer;
+use crate::model::{
+    ArrowStyle, Door, DoorKind, HingeSide, ObjectKind, PlanFile, Point, ProjectAsset, SwingSide,
+    Wall, WindowKind,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -77,8 +76,10 @@ pub fn export_png(
     include_distances: bool,
 ) -> Result<(), String> {
     let scene = build_scene(plan, assets, localizer, include_distances)?;
-    let mut options = usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
+    let options = usvg::Options {
+        fontdb: crate::platform::font_database(),
+        ..usvg::Options::default()
+    };
     let tree = usvg::Tree::from_str(&scene.svg, &options).map_err(|error| error.to_string())?;
     let mut pixmap =
         Pixmap::new(scene.width, scene.height).ok_or_else(|| "Invalid export size".to_owned())?;
@@ -139,7 +140,7 @@ pub fn export_pdf(
 
     let pixmap = render_scene(&scene)?;
     let mut rgb = Vec::with_capacity((scene.width * scene.height * 3) as usize);
-    for pixel in pixmap.data().chunks_exact(4) {
+    for pixel in pixmap.data().as_chunks::<4>().0 {
         rgb.extend_from_slice(&pixel[..3]);
     }
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 9);
@@ -160,8 +161,10 @@ pub fn export_pdf(
 }
 
 fn render_scene(scene: &ExportScene) -> Result<Pixmap, String> {
-    let mut options = usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
+    let options = usvg::Options {
+        fontdb: crate::platform::font_database(),
+        ..usvg::Options::default()
+    };
     let tree = usvg::Tree::from_str(&scene.svg, &options).map_err(|error| error.to_string())?;
     let mut pixmap =
         Pixmap::new(scene.width, scene.height).ok_or_else(|| "Invalid export size".to_owned())?;
@@ -192,20 +195,21 @@ fn build_scene(
         svg,
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="{view_x:.3} {view_y:.3} {view_width:.3} {view_height:.3}">"#
     )
-    .unwrap();
+    .expect("formatting into a String cannot fail");
     writeln!(
         svg,
         r##"<rect x="{view_x:.3}" y="{view_y:.3}" width="{view_width:.3}" height="{view_height:.3}" fill="#ffffff"/>"##
     )
-    .unwrap();
+    .expect("formatting into a String cannot fail");
 
     for room in &plan.rooms {
         if !plan.item_visible(&room.id) {
             continue;
         }
-        write!(svg, r#"<polygon points=""#).unwrap();
+        write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
         for point in &room.points {
-            write!(svg, "{:.3},{:.3} ", point.x, point.y).unwrap();
+            write!(svg, "{:.3},{:.3} ", point.x, point.y)
+                .expect("formatting into a String cannot fail");
         }
         let opacity = plan.item_opacity(&room.id);
         writeln!(
@@ -215,7 +219,7 @@ fn build_scene(
             if room.fill_visible { 0.31 * opacity } else { 0.0 },
             0.7 * opacity,
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         let center = crate::room_detection::polygon_center(&room.points);
         let title = if room.name.trim().is_empty() {
             localizer.text("room.default_name")
@@ -232,17 +236,19 @@ fn build_scene(
             center.x,
             room.area_square_centimeters() / 10_000.0,
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
     }
 
     for area in &plan.areas {
         if !plan.item_visible(&area.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&area.id)).unwrap();
-        write!(svg, r#"<polygon points=""#).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&area.id))
+            .expect("formatting into a String cannot fail");
+        write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
         for point in &area.points {
-            write!(svg, "{:.3},{:.3} ", point.x, point.y).unwrap();
+            write!(svg, "{:.3},{:.3} ", point.x, point.y)
+                .expect("formatting into a String cannot fail");
         }
         writeln!(
             svg,
@@ -250,7 +256,7 @@ fn build_scene(
             svg_color(area.fill_color),
             svg_color(area.stroke_color)
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         let center = area_center(area);
         writeln!(
             svg,
@@ -259,7 +265,7 @@ fn build_scene(
             center.y,
             area.area_square_centimeters() / 10_000.0
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         svg.push_str("</g>\n");
     }
 
@@ -285,7 +291,8 @@ fn build_scene(
             continue;
         }
         let encoded = STANDARD.encode(png);
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&image.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&image.id))
+            .expect("formatting into a String cannot fail");
         writeln!(
             svg,
             r#"<image x="{:.3}" y="{:.3}" width="{:.3}" height="{:.3}" preserveAspectRatio="none" transform="rotate({:.3} {:.3} {:.3})" href="data:image/png;base64,{}"/>"#,
@@ -298,7 +305,7 @@ fn build_scene(
             image.y,
             encoded
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         svg.push_str("</g>\n");
     }
 
@@ -306,7 +313,8 @@ fn build_scene(
         if !plan.item_visible(&object.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&object.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&object.id))
+            .expect("formatting into a String cannot fail");
         let points = rotated_rectangle(
             object.x,
             object.y,
@@ -314,9 +322,10 @@ fn build_scene(
             object.height,
             object.rotation,
         );
-        write!(svg, r#"<polygon points=""#).unwrap();
+        write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
         for point in points {
-            write!(svg, "{:.3},{:.3} ", point.x, point.y).unwrap();
+            write!(svg, "{:.3},{:.3} ", point.x, point.y)
+                .expect("formatting into a String cannot fail");
         }
         writeln!(
             svg,
@@ -324,7 +333,7 @@ fn build_scene(
             svg_color(object.fill_color),
             svg_color(object.stroke_color)
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         let label_key = match object.kind {
             ObjectKind::Rectangle => "object.rectangle",
             ObjectKind::Bed => "object.bed",
@@ -341,7 +350,7 @@ fn build_scene(
             svg_color(object.stroke_color),
             escape_xml(object.display_name(&localizer.text(label_key)))
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         svg.push_str("</g>\n");
     }
 
@@ -349,7 +358,8 @@ fn build_scene(
         if !plan.item_visible(&text.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&text.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&text.id))
+            .expect("formatting into a String cannot fail");
         for (index, line) in text.text.lines().enumerate() {
             let line_count = text.text.lines().count().max(1) as f32;
             let offset = (index as f32 - (line_count - 1.0) / 2.0) * text.size * 1.2;
@@ -366,7 +376,7 @@ fn build_scene(
                 text.y,
                 escape_xml(line)
             )
-            .unwrap();
+            .expect("formatting into a String cannot fail");
         }
         svg.push_str("</g>\n");
     }
@@ -374,7 +384,8 @@ fn build_scene(
         if !plan.item_visible(&line.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&line.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&line.id))
+            .expect("formatting into a String cannot fail");
         write_line(
             &mut svg,
             line.start(),
@@ -389,7 +400,8 @@ fn build_scene(
         if !plan.item_visible(&wall.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&wall.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&wall.id))
+            .expect("formatting into a String cannot fail");
         writeln!(
             svg,
             r#"<line x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}" stroke="{}" stroke-width="{:.3}" stroke-linecap="square"/>"#,
@@ -400,7 +412,7 @@ fn build_scene(
             svg_color(wall.color),
             wall.thickness
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         svg.push_str("</g>\n");
     }
 
@@ -408,7 +420,8 @@ fn build_scene(
         if !plan.item_visible(&door.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&door.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&door.id))
+            .expect("formatting into a String cannot fail");
         if let Some(wall) = plan.walls.iter().find(|wall| wall.id == door.wall_id) {
             write_door(&mut svg, door, wall);
         }
@@ -425,7 +438,8 @@ fn build_scene(
         if length <= f32::EPSILON {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&window.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&window.id))
+            .expect("formatting into a String cannot fail");
         let ux = (wall.x2 - wall.x1) / length;
         let uy = (wall.y2 - wall.y1) / length;
         let center = wall.point_at(window.t);
@@ -465,7 +479,7 @@ fn build_scene(
             r#"<g opacity="{:.3}">"#,
             plan.item_opacity(&compass.id)
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         let radius = compass.size * 0.5;
         let color = svg_color(compass.color);
         writeln!(
@@ -494,7 +508,7 @@ fn build_scene(
             compass.y - radius - 5.0,
             color
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         svg.push_str("</g>\n");
     }
 
@@ -502,7 +516,8 @@ fn build_scene(
         if !plan.item_visible(&arrow.id) {
             continue;
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&arrow.id)).unwrap();
+        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&arrow.id))
+            .expect("formatting into a String cannot fail");
         let start = Point::new(arrow.x, arrow.y);
         let end = arrow.end();
         let angle = arrow.angle_degrees().to_radians();
@@ -529,7 +544,7 @@ fn build_scene(
                     r#"<polyline points="{:.3},{:.3} {:.3},{:.3} {:.3},{:.3}" fill="none" stroke="{}" stroke-width="{:.3}" stroke-linejoin="miter"/>"#,
                     left.x, left.y, end.x, end.y, right.x, right.y, color, stroke
                 )
-                .unwrap();
+                .expect("formatting into a String cannot fail");
             }
             ArrowStyle::Hollow => {
                 write_line(&mut svg, start, base, (arrow.width * 0.12).max(1.5), &color);
@@ -539,7 +554,7 @@ fn build_scene(
                     left.x, left.y, end.x, end.y, right.x, right.y, color,
                     (arrow.width * 0.12).max(1.5)
                 )
-                .unwrap();
+                .expect("formatting into a String cannot fail");
             }
             ArrowStyle::Solid => {
                 let shaft_half = (arrow.width * 0.28).max(1.0);
@@ -553,7 +568,7 @@ fn build_scene(
                     s1.x, s1.y, s2.x, s2.y, left.x, left.y, end.x, end.y,
                     right.x, right.y, s3.x, s3.y, s4.x, s4.y, color
                 )
-                .unwrap();
+                .expect("formatting into a String cannot fail");
             }
         }
         svg.push_str("</g>\n");
@@ -651,7 +666,7 @@ fn write_door(svg: &mut String, door: &Door, wall: &Wall) {
         while delta < -std::f32::consts::PI {
             delta += std::f32::consts::TAU;
         }
-        write!(svg, r#"<polyline points=""#).unwrap();
+        write!(svg, r#"<polyline points=""#).expect("formatting into a String cannot fail");
         for index in 0..=18 {
             let angle = start_angle + delta * index as f32 / 18.0;
             write!(
@@ -660,20 +675,20 @@ fn write_door(svg: &mut String, door: &Door, wall: &Wall) {
                 hinge.x + angle.cos() * leaf_width,
                 hinge.y + angle.sin() * leaf_width
             )
-            .unwrap();
+            .expect("formatting into a String cannot fail");
         }
         writeln!(
             svg,
             r#"" fill="none" stroke="{}" stroke-width="1.3"/>"#,
             color
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
         writeln!(
             svg,
             r#"<circle cx="{:.3}" cy="{:.3}" r="4" fill="{}"/>"#,
             hinge.x, hinge.y, color
         )
-        .unwrap();
+        .expect("formatting into a String cannot fail");
     }
 }
 
@@ -683,7 +698,7 @@ fn write_line(svg: &mut String, start: Point, end: Point, width: f32, color: &st
         r#"<line x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}" stroke="{}" stroke-width="{:.3}"/>"#,
         start.x, start.y, end.x, end.y, color, width
     )
-    .unwrap();
+    .expect("formatting into a String cannot fail");
 }
 
 fn write_distance_label(svg: &mut String, start: Point, end: Point, centimeters: f32) {
@@ -702,13 +717,13 @@ fn write_distance_label(svg: &mut String, start: Point, end: Point, centimeters:
         y - 9.0,
         box_width
     )
-    .unwrap();
+    .expect("formatting into a String cannot fail");
     writeln!(
         svg,
         r##"<text x="{x:.3}" y="{y:.3}" text-anchor="middle" dominant-baseline="central" font-family="Arial, sans-serif" font-size="12" fill="#505050">{}</text>"##,
         escape_xml(&label)
     )
-    .unwrap();
+    .expect("formatting into a String cannot fail");
 }
 
 #[allow(clippy::too_many_arguments)]

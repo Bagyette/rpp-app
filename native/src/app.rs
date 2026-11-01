@@ -3,49 +3,41 @@ mod layers;
 mod render;
 mod rooms;
 
-use std::{
-    collections::HashMap,
-    fs,
-    io::Cursor,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::HashMap;
+use std::fs;
+use std::io::Cursor;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use eframe::egui;
 use eframe::egui::epaint::TextShape;
 use eframe::egui::{
-    self, Align, Align2, CentralPanel, Color32, ColorImage, CornerRadius, Event, FontData,
-    FontDefinitions, FontFamily, FontId, Key, Layout, Margin, Mesh, Modifiers, MouseWheelUnit,
-    Painter, Panel, PointerButton, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind,
-    TextureHandle, TextureOptions, Theme, Ui, Vec2,
+    Align, Align2, CentralPanel, Color32, ColorImage, CornerRadius, Event, FontDefinitions,
+    FontFamily, FontId, Key, Layout, Margin, Mesh, Painter, Panel, PointerButton, Pos2, Rect,
+    Response, Sense, Shape, Stroke, StrokeKind, TextureHandle, TextureOptions, Theme, Ui, Vec2,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    export,
-    format::{FormatError, decode_plan, encode_project},
-    localization::Localizer,
-    model::{
-        AreaShape, ArrowStyle, CompassRose, DEFAULT_LAYER_ID, Door, DoorKind, HingeSide,
-        ImageObject, Layer, ObjectKind, PlanArrow, PlanFile, PlanLine, PlanObject, Point,
-        ProjectAsset, Room, RoomKind, RoomSource, Snapshot, SwingSide, TextObject, Wall, WallKind,
-        Window, WindowKind, default_area_fill_color, default_area_stroke_color,
-        default_arrow_color, default_compass_color, default_line_color, default_object_fill_color,
-        default_object_stroke_color, default_opening_color, default_text_color, default_wall_color,
-        default_wall_thickness, default_window_color,
-    },
+use crate::format::{FormatError, decode_plan, encode_project};
+use crate::localization::Localizer;
+use crate::model::{
+    AreaShape, ArrowStyle, CompassRose, DEFAULT_LAYER_ID, Door, DoorKind, HingeSide, ImageObject,
+    Layer, ObjectKind, PlanArrow, PlanFile, PlanLine, PlanObject, Point, ProjectAsset, Room,
+    RoomKind, RoomSource, Snapshot, SwingSide, TextObject, Wall, WallKind, Window, WindowKind,
+    default_area_fill_color, default_area_stroke_color, default_arrow_color, default_compass_color,
+    default_line_color, default_object_fill_color, default_object_stroke_color,
+    default_opening_color, default_text_color, default_wall_color, default_wall_thickness,
+    default_window_color,
 };
+use crate::{export, input, platform};
 
 const GRID: f32 = 20.0;
 const MIN_WALL: f32 = 20.0;
 const WALL_WIDTH: f32 = 14.0;
 const MIN_ZOOM: f32 = 0.35;
 const MAX_ZOOM: f32 = 3.0;
-const MAX_SCROLL_STEPS: f32 = 1.0;
-const SCROLL_ZOOM_PER_STEP: f32 = 1.05;
 const DEFAULT_IMAGE_MAX_SIZE: f32 = 40.0;
 const BUILTIN_EMERGENCY_EXIT_ID: &str = "builtin-emergency-exit";
 const BUILTIN_EMERGENCY_EXIT_BYTES: &[u8] = include_bytes!("../assets/library/emergency-exit.png");
@@ -68,10 +60,6 @@ fn make_id(prefix: &str) -> String {
     format!("{prefix}-{time}-{counter}")
 }
 
-fn scroll_zoom_factor(steps: f32) -> f32 {
-    SCROLL_ZOOM_PER_STEP.powf(steps.clamp(-MAX_SCROLL_STEPS, MAX_SCROLL_STEPS))
-}
-
 fn default_image_dimensions(pixel_width: u32, pixel_height: u32) -> (f32, f32) {
     let largest = pixel_width.max(pixel_height).max(1) as f32;
     let scale = (DEFAULT_IMAGE_MAX_SIZE / largest).min(1.0);
@@ -85,7 +73,7 @@ fn format_distance(centimeters: f32, unit: Unit) -> String {
         let inches = total_inches - feet * 12.0;
         return format!("{feet:.0}' {inches:.1}\"");
     }
-    let value = unit.from_centimeters(centimeters);
+    let value = unit.display_from_centimeters(centimeters);
     let precision = if unit == Unit::M { 3 } else { 1 };
     format!("{value:.precision$}{}", unit.suffix())
 }
@@ -171,7 +159,7 @@ enum AppTheme {
 }
 
 impl Unit {
-    fn from_centimeters(self, value: f32) -> f32 {
+    fn display_from_centimeters(self, value: f32) -> f32 {
         match self {
             Self::Mm => value * 10.0,
             Self::Cm => value,
@@ -228,6 +216,7 @@ struct AppSettings {
     pdf_paper: export::PaperFormat,
     image_limit_index: u8,
     theme: AppTheme,
+    scroll_mode: input::ScrollMode,
 }
 
 impl Default for AppSettings {
@@ -246,6 +235,7 @@ impl Default for AppSettings {
             pdf_paper: export::PaperFormat::A4,
             image_limit_index: 4,
             theme: AppTheme::Light,
+            scroll_mode: input::ScrollMode::Auto,
         }
     }
 }
@@ -350,10 +340,11 @@ fn selectable_selections(plan: &PlanFile) -> Vec<Selection> {
     selections
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum PendingAction {
     New,
     Open,
+    OpenPath(PathBuf),
     Close,
 }
 
@@ -500,6 +491,7 @@ pub struct RppApp {
     future: Vec<Snapshot>,
     zoom: f32,
     pan: Vec2,
+    panning_canvas: bool,
     grid_size: f32,
     grid_visible: bool,
     snap_enabled: bool,
@@ -524,6 +516,7 @@ pub struct RppApp {
     layers_open: bool,
     active_layer_id: String,
     theme: AppTheme,
+    scroll_mode: input::ScrollMode,
 }
 
 impl RppApp {
@@ -579,8 +572,16 @@ impl RppApp {
     }
 
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let mut app = Self::from_context(cc.egui_ctx.clone());
+        if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
+            app.request_open_path(path);
+        }
+        app
+    }
+
+    fn from_context(context: egui::Context) -> Self {
         let settings = load_settings();
-        configure_style(&cc.egui_ctx, settings.theme);
+        configure_style(&context, settings.theme);
         let mut localizer = Localizer::load();
         if let Some(path) = language_path()
             && let Ok(language) = fs::read_to_string(path)
@@ -589,18 +590,18 @@ impl RppApp {
         }
         let initial_status = localizer.text("app.ready");
         let undo_icon = load_embedded_icon(
-            &cc.egui_ctx,
+            &context,
             "undo-icon",
             include_bytes!("../assets/icons/undo.png"),
         );
         let redo_icon = load_embedded_icon(
-            &cc.egui_ctx,
+            &context,
             "redo-icon",
             include_bytes!("../assets/icons/redo.png"),
         );
 
         let mut app = Self {
-            context: cc.egui_ctx.clone(),
+            context: context.clone(),
             plan: PlanFile::default(),
             assets: Arc::new(Vec::new()),
             textures: HashMap::new(),
@@ -634,6 +635,7 @@ impl RppApp {
             future: Vec::new(),
             zoom: 1.0,
             pan: Vec2::new(80.0, 70.0),
+            panning_canvas: false,
             grid_size: settings.grid_size,
             grid_visible: settings.grid_visible,
             snap_enabled: settings.snap_enabled,
@@ -658,9 +660,10 @@ impl RppApp {
             layers_open: false,
             active_layer_id: DEFAULT_LAYER_ID.to_owned(),
             theme: settings.theme,
+            scroll_mode: settings.scroll_mode,
         };
 
-        app.rebuild_textures(&cc.egui_ctx);
+        app.rebuild_textures(&context);
         if let Some(path) = autosave_path()
             && let Ok(bytes) = fs::read(path)
             && let Ok(decoded) = decode_plan(&bytes)
@@ -668,8 +671,9 @@ impl RppApp {
             app.plan = decoded.plan;
             app.assets = Arc::new(decoded.assets);
             app.refresh_automatic_rooms();
-            app.rebuild_textures(&cc.egui_ctx);
+            app.rebuild_textures(&context);
             app.status = app.localizer.text("app.restored");
+            app.dirty = true;
         }
 
         app
@@ -899,6 +903,7 @@ impl RppApp {
             pdf_paper: self.pdf_paper,
             image_limit_index: self.image_limit_index,
             theme: self.theme,
+            scroll_mode: self.scroll_mode,
         });
     }
 
@@ -1241,7 +1246,8 @@ impl RppApp {
                         "distance",
                         format!(
                             "{:.2}",
-                            self.unit.from_centimeters(delta.x.abs().max(delta.y.abs()))
+                            self.unit
+                                .display_from_centimeters(delta.x.abs().max(delta.y.abs()))
                         ),
                     ),
                     ("unit", self.unit.as_str().to_owned()),
@@ -1453,17 +1459,26 @@ impl RppApp {
         }
     }
 
+    fn request_open_path(&mut self, path: PathBuf) {
+        if self.dirty {
+            self.pending_action = Some(PendingAction::OpenPath(path));
+        } else {
+            self.open_path(path);
+        }
+    }
+
     fn run_pending_action(&mut self, ctx: &egui::Context, action: PendingAction) {
         self.pending_action = None;
         match action {
             PendingAction::New => self.new_plan(),
             PendingAction::Open => self.open_plan(),
+            PendingAction::OpenPath(path) => self.open_path(path),
             PendingAction::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
 
     fn confirm_discard_dialog(&mut self, ctx: &egui::Context) {
-        let Some(action) = self.pending_action else {
+        let Some(action) = self.pending_action.clone() else {
             return;
         };
         egui::Window::new(self.localizer.text("dialog.unsaved_title"))
@@ -1477,12 +1492,12 @@ impl RppApp {
                     if ui.button(self.localizer.text("action.save")).clicked() {
                         self.save_plan();
                         if !self.dirty {
-                            self.run_pending_action(ctx, action);
+                            self.run_pending_action(ctx, action.clone());
                         }
                     }
                     if ui.button(self.localizer.text("action.discard")).clicked() {
                         self.dirty = false;
-                        self.run_pending_action(ctx, action);
+                        self.run_pending_action(ctx, action.clone());
                     }
                     if ui.button(self.localizer.text("action.cancel")).clicked() {
                         self.pending_action = None;
@@ -1502,6 +1517,10 @@ impl RppApp {
             return;
         };
 
+        self.open_path(path);
+    }
+
+    fn open_path(&mut self, path: PathBuf) {
         match fs::read(&path) {
             Ok(bytes) => match decode_plan(&bytes) {
                 Ok(decoded) => {
@@ -1513,6 +1532,12 @@ impl RppApp {
                     let context = self.context.clone();
                     self.rebuild_textures(&context);
                     self.selection = None;
+                    self.additional_selections.clear();
+                    self.draft = None;
+                    self.line_draft = None;
+                    self.arrow_draft = None;
+                    self.area_draft.clear();
+                    self.room_draft.clear();
                     self.past.clear();
                     self.future.clear();
                     self.current_file = Some(path.clone());
@@ -2258,146 +2283,65 @@ impl RppApp {
     fn keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         let previous_tool = self.tool;
         let editing_text = ctx.egui_wants_keyboard_input();
-        let (
-            save,
-            save_as,
-            undo,
-            redo,
-            select_all,
-            duplicate,
-            delete,
-            escape,
-            select,
-            wall,
-            line,
-            measure,
-            text,
-            door,
-            window,
-            object,
-            area,
-            room,
-            compass,
-            arrow,
-        ) = ctx.input_mut(|input| {
-            (
-                input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::S)),
-                input.consume_shortcut(&egui::KeyboardShortcut::new(
-                    Modifiers::CTRL | Modifiers::SHIFT,
-                    Key::S,
-                )),
-                input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::Z)),
-                input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::Y))
-                    || input.consume_shortcut(&egui::KeyboardShortcut::new(
-                        Modifiers::CTRL | Modifiers::SHIFT,
-                        Key::Z,
-                    )),
-                !editing_text
-                    && input
-                        .consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::A)),
-                input.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::CTRL, Key::D)),
-                input.key_pressed(Key::Delete) || input.key_pressed(Key::Backspace),
-                input.key_pressed(Key::Escape),
-                input.key_pressed(Key::V),
-                input.key_pressed(Key::M),
-                input.key_pressed(Key::L),
-                input.key_pressed(Key::R),
-                input.key_pressed(Key::T),
-                input.key_pressed(Key::P),
-                input.key_pressed(Key::F),
-                input.key_pressed(Key::O),
-                input.key_pressed(Key::A),
-                input.key_pressed(Key::B),
-                input.key_pressed(Key::N),
-                input.key_pressed(Key::Y),
-            )
-        });
-
-        if save {
-            self.save_plan();
+        if self.settings_open
+            || self.layers_open
+            || ctx.any_popup_open()
+            || self.pending_action.is_some()
+        {
+            return;
         }
-        if save_as {
+        let actions = ctx.input_mut(|input| input::KeyboardActions::read(input, editing_text));
+        if actions.new {
+            self.request_new_plan();
+        }
+        if actions.open {
+            self.request_open_plan();
+        }
+        if actions.save_as {
             self.save_plan_as();
         }
-        if undo {
+        if actions.save {
+            self.save_plan();
+        }
+        if actions.undo {
             self.undo();
         }
-        if redo {
+        if actions.redo {
             self.redo();
         }
-        if !editing_text {
-            if select_all {
-                self.select_all();
-            }
-            if duplicate {
-                self.duplicate_selected();
-            }
-            if delete {
-                self.remove_selected();
-            }
-            if select {
-                self.tool = Tool::Select;
-            }
-            if wall {
-                self.tool = Tool::Wall;
-            }
-            if line {
-                self.tool = Tool::Line;
-            }
-            if measure {
-                self.tool = Tool::Measure;
-            }
-            if text {
-                self.tool = Tool::Text;
-            }
-            if door {
-                self.tool = Tool::Door;
-            }
-            if window {
-                self.tool = Tool::Window;
-            }
-            if object {
-                self.tool = Tool::Object;
-            }
-            if area {
-                self.tool = Tool::Area;
-            }
-            if room {
-                self.tool = Tool::Room;
-            }
-            if compass {
-                self.tool = Tool::Compass;
-            }
-            if arrow {
-                self.tool = Tool::Arrow;
-            }
-
-            let nudge = ctx.input(|input| {
-                let step = if input.modifiers.shift { 10.0 } else { 1.0 };
-                let x = if input.key_pressed(Key::ArrowLeft) {
-                    -step
-                } else if input.key_pressed(Key::ArrowRight) {
-                    step
-                } else {
-                    0.0
-                };
-                let y = if input.key_pressed(Key::ArrowUp) {
-                    -step
-                } else if input.key_pressed(Key::ArrowDown) {
-                    step
-                } else {
-                    0.0
-                };
-                Point::new(x, y)
-            });
-            if nudge.x != 0.0 || nudge.y != 0.0 {
-                self.nudge_selected(nudge);
-            }
+        if actions.select_all {
+            self.select_all();
         }
-        if self.tool != previous_tool && !select_all {
+        if actions.duplicate {
+            self.duplicate_selected();
+        }
+        if actions.delete {
+            self.remove_selected();
+        }
+        if let Some(key) = actions.tool_key {
+            self.tool = match key {
+                Key::V => Tool::Select,
+                Key::M => Tool::Wall,
+                Key::L => Tool::Line,
+                Key::R => Tool::Measure,
+                Key::T => Tool::Text,
+                Key::P => Tool::Door,
+                Key::F => Tool::Window,
+                Key::O => Tool::Object,
+                Key::A => Tool::Area,
+                Key::B => Tool::Room,
+                Key::N => Tool::Compass,
+                Key::Y => Tool::Arrow,
+                _ => self.tool,
+            };
+        }
+        if actions.nudge != Vec2::ZERO {
+            self.nudge_selected(Point::new(actions.nudge.x, actions.nudge.y));
+        }
+        if self.tool != previous_tool && !actions.select_all {
             self.additional_selections.clear();
         }
-        if escape {
+        if actions.escape {
             self.draft = None;
             self.line_draft = None;
             self.measurement = None;
@@ -2422,14 +2366,14 @@ impl RppApp {
 
     fn top_bar(&mut self, root: &mut Ui) {
         Panel::top("top_bar")
-            .exact_size(48.0)
+            .min_size(48.0)
             .frame(
                 egui::Frame::new()
                     .fill(self.panel_fill())
                     .inner_margin(Margin::symmetric(14, 8)),
             )
             .show(root, |ui| {
-                ui.horizontal_centered(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("RPP").strong().size(19.0).color(ACCENT));
                     ui.label(
                         egui::RichText::new("Ran Plan Plan")
@@ -2437,7 +2381,7 @@ impl RppApp {
                             .color(self.muted_text_color()),
                     );
                     ui.label(
-                        egui::RichText::new("0.8.0")
+                        egui::RichText::new(env!("CARGO_PKG_VERSION"))
                             .size(10.0)
                             .color(self.subtle_text_color()),
                     );
@@ -2530,7 +2474,7 @@ impl RppApp {
                         self.layers_open = true;
                     }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.horizontal(|ui| {
                         let languages = self.localizer.languages();
                         let mut selected_language = self.localizer.current_language().to_owned();
                         egui::ComboBox::from_id_salt("language")
@@ -2590,6 +2534,7 @@ impl RppApp {
         egui::Window::new(self.localizer.text("settings.title"))
             .open(&mut open)
             .resizable(false)
+            .vscroll(true)
             .default_width(390.0)
             .show(ctx, |ui| {
                 ui.heading(self.localizer.text("settings.general"));
@@ -2668,7 +2613,7 @@ impl RppApp {
                 changed |= ui
                     .checkbox(&mut self.snap_enabled, self.localizer.text("property.snap"))
                     .changed();
-                let mut spacing = self.unit.from_centimeters(self.grid_size);
+                let mut spacing = self.unit.display_from_centimeters(self.grid_size);
                 if property_row(ui, &self.localizer.text("property.spacing"), |ui| {
                     ui.add(
                         egui::DragValue::new(&mut spacing)
@@ -2681,6 +2626,27 @@ impl RppApp {
                     self.grid_size = self.unit.to_centimeters(spacing).clamp(0.1, 5000.0);
                     changed = true;
                 }
+
+                let original_scroll_mode = self.scroll_mode;
+                property_row(ui, &self.localizer.text("navigation.scroll"), |ui| {
+                    egui::ComboBox::from_id_salt("scroll-mode")
+                        .selected_text(self.localizer.text(self.scroll_mode.translation_key()))
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                input::ScrollMode::Auto,
+                                input::ScrollMode::Pan,
+                                input::ScrollMode::Zoom,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.scroll_mode,
+                                    mode,
+                                    self.localizer.text(mode.translation_key()),
+                                );
+                            }
+                        })
+                        .response
+                });
+                changed |= self.scroll_mode != original_scroll_mode;
 
                 ui.add_space(12.0);
                 ui.heading(self.localizer.text("settings.images"));
@@ -2720,102 +2686,109 @@ impl RppApp {
                     .inner_margin(Margin::same(10)),
             )
             .show(root, |ui| {
-                let previous_tool = self.tool;
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Select,
-                    &self.localizer.text("tool.select"),
-                    "V",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Wall,
-                    &self.localizer.text("tool.wall"),
-                    "M",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Line,
-                    &self.localizer.text("tool.line"),
-                    "L",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Measure,
-                    &self.localizer.text("tool.measure"),
-                    "R",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Text,
-                    &self.localizer.text("tool.text"),
-                    "T",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Door,
-                    &self.localizer.text("tool.door"),
-                    "P",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Window,
-                    &self.localizer.text("tool.window"),
-                    "F",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Object,
-                    &self.localizer.text("tool.object"),
-                    "O",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Area,
-                    &self.localizer.text("tool.area"),
-                    "A",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Room,
-                    &self.localizer.text("tool.room"),
-                    "B",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Compass,
-                    &self.localizer.text("tool.compass"),
-                    "N",
-                );
-                tool_button(
-                    ui,
-                    &mut self.tool,
-                    Tool::Arrow,
-                    &self.localizer.text("tool.arrow"),
-                    "Y",
-                );
-                if self.tool != previous_tool {
-                    self.draft = None;
-                    self.line_draft = None;
-                    self.measurement = None;
-                    self.arrow_draft = None;
-                    self.area_draft.clear();
-                    self.room_draft.clear();
-                    self.wall_press_origin = None;
-                    self.additional_selections.clear();
-                }
+                egui::ScrollArea::vertical()
+                    .id_salt("tools-scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.tool_panel_contents(ui));
             });
+    }
+
+    fn tool_panel_contents(&mut self, ui: &mut Ui) {
+        let previous_tool = self.tool;
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Select,
+            &self.localizer.text("tool.select"),
+            "V",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Wall,
+            &self.localizer.text("tool.wall"),
+            "M",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Line,
+            &self.localizer.text("tool.line"),
+            "L",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Measure,
+            &self.localizer.text("tool.measure"),
+            "R",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Text,
+            &self.localizer.text("tool.text"),
+            "T",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Door,
+            &self.localizer.text("tool.door"),
+            "P",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Window,
+            &self.localizer.text("tool.window"),
+            "F",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Object,
+            &self.localizer.text("tool.object"),
+            "O",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Area,
+            &self.localizer.text("tool.area"),
+            "A",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Room,
+            &self.localizer.text("tool.room"),
+            "B",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Compass,
+            &self.localizer.text("tool.compass"),
+            "N",
+        );
+        tool_button(
+            ui,
+            &mut self.tool,
+            Tool::Arrow,
+            &self.localizer.text("tool.arrow"),
+            "Y",
+        );
+        if self.tool != previous_tool {
+            self.draft = None;
+            self.line_draft = None;
+            self.measurement = None;
+            self.arrow_draft = None;
+            self.area_draft.clear();
+            self.room_draft.clear();
+            self.wall_press_origin = None;
+            self.additional_selections.clear();
+        }
     }
 
     fn status_bar(&mut self, root: &mut Ui) {
@@ -2907,11 +2880,17 @@ impl RppApp {
                                     &[
                                         (
                                             "x",
-                                            format!("{:.2}", self.unit.from_centimeters(cursor.x)),
+                                            format!(
+                                                "{:.2}",
+                                                self.unit.display_from_centimeters(cursor.x)
+                                            ),
                                         ),
                                         (
                                             "y",
-                                            format!("{:.2}", self.unit.from_centimeters(cursor.y)),
+                                            format!(
+                                                "{:.2}",
+                                                self.unit.display_from_centimeters(cursor.y)
+                                            ),
                                         ),
                                         ("unit", self.unit.as_str().to_owned()),
                                     ],
@@ -2938,21 +2917,35 @@ impl RppApp {
                 let rect = ui.available_rect_before_wrap();
                 let response = ui.allocate_rect(rect, Sense::click_and_drag());
                 let painter = ui.painter_at(rect);
-                if !ctx.egui_wants_keyboard_input()
-                    && ctx.input(|input| input.key_pressed(Key::Home))
-                {
-                    self.fit_plan(rect);
+                if !ctx.egui_wants_keyboard_input() && !input_blocked {
+                    let actions = ctx.input_mut(input::view_actions);
+                    if actions.fit {
+                        self.fit_plan(rect);
+                    } else if actions.zoom != 1.0 {
+                        let anchor = rect.center();
+                        let before = self.screen_to_world(rect, anchor);
+                        self.zoom = (self.zoom * actions.zoom).clamp(MIN_ZOOM, MAX_ZOOM);
+                        self.pan = anchor - rect.min - Vec2::new(before.x, before.y) * self.zoom;
+                    }
                 }
-                if !input_blocked {
-                    self.handle_canvas_input(&ctx, &response, rect);
-                }
-                self.paint_canvas(&painter, rect);
-
                 let zoom_rect = Rect::from_min_size(
                     Pos2::new(rect.right() - 188.0, rect.bottom() - 44.0),
                     Vec2::new(176.0, 32.0),
                 );
+                let over_zoom_controls = ctx.input(|input| {
+                    input
+                        .pointer
+                        .hover_pos()
+                        .is_some_and(|position| zoom_rect.contains(position))
+                });
+                if !input_blocked && !over_zoom_controls {
+                    self.handle_canvas_input(&ctx, &response, rect);
+                }
+                self.paint_canvas(&painter, rect);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(zoom_rect), |ui| {
+                    if input_blocked {
+                        ui.disable();
+                    }
                     egui::Frame::new()
                         .fill(self.panel_fill())
                         .stroke(Stroke::new(
@@ -2990,35 +2983,43 @@ impl RppApp {
             .hover_pos()
             .map(|position| self.screen_to_world(rect, position));
         if response.hovered() {
-            let scroll_steps = ctx.input(|input| {
-                input
-                    .raw
-                    .events
-                    .iter()
-                    .filter_map(|event| match event {
-                        Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                            MouseWheelUnit::Point => delta.y / 50.0,
-                            MouseWheelUnit::Line => delta.y,
-                            MouseWheelUnit::Page => delta.y,
-                        }),
-                        _ => None,
-                    })
-                    .sum::<f32>()
-            });
-            if scroll_steps.abs() > f32::EPSILON
-                && let Some(pointer) = response.hover_pos()
-            {
+            let navigation = ctx.input(|input| input::canvas_navigation(input, self.scroll_mode));
+            if let Some(pointer) = response.hover_pos() {
                 let before = self.screen_to_world(rect, pointer);
-                let factor = scroll_zoom_factor(scroll_steps);
-                let next_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
-                self.zoom = next_zoom;
-                self.pan = pointer - rect.min - Vec2::new(before.x, before.y) * next_zoom;
+                self.zoom = (self.zoom * navigation.zoom).clamp(MIN_ZOOM, MAX_ZOOM);
+                self.pan =
+                    pointer - rect.min - Vec2::new(before.x, before.y) * self.zoom + navigation.pan;
             }
         }
 
-        if response.dragged_by(PointerButton::Middle) {
+        let space_down =
+            !ctx.egui_wants_keyboard_input() && ctx.input(|input| input.key_down(Key::Space));
+        if space_down
+            && response.is_pointer_button_down_on()
+            && ctx.input(|input| input.pointer.primary_down())
+        {
+            self.panning_canvas = true;
+        }
+        let panning = self.panning_canvas;
+        if panning {
+            self.pan += response.drag_delta();
+            if !ctx.input(|input| input.pointer.primary_down()) {
+                self.panning_canvas = false;
+            }
+        }
+        if !panning && response.dragged_by(PointerButton::Middle) {
             self.pan += response.drag_delta();
         }
+        if space_down
+            || panning
+            || ctx.input(|input| input.pointer.button_down(PointerButton::Middle))
+        {
+            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            return;
+        }
+        self.cursor_world = response
+            .hover_pos()
+            .map(|position| self.screen_to_world(rect, position));
 
         if self.tool == Tool::Wall {
             self.handle_wall_events(ctx, rect);
@@ -4756,6 +4757,15 @@ impl eframe::App for RppApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_action = Some(PendingAction::Close);
         }
+        if self.pending_action.is_none()
+            && let Some(path) = ctx.input_mut(|input| {
+                std::mem::take(&mut input.raw.dropped_files)
+                    .into_iter()
+                    .find_map(|file| file.path)
+            })
+        {
+            self.request_open_path(path);
+        }
         self.keyboard_shortcuts(&ctx);
         // Remember the popup state before drawing the top bar too: selecting a
         // menu item may close the popup during this pass, but that same click
@@ -4767,7 +4777,11 @@ impl eframe::App for RppApp {
         self.inspector(ui);
         self.canvas(
             ui,
-            popup_was_open || ctx.any_popup_open() || self.settings_open || self.layers_open,
+            popup_was_open
+                || ctx.any_popup_open()
+                || self.settings_open
+                || self.layers_open
+                || self.pending_action.is_some(),
         );
         self.confirm_discard_dialog(&ctx);
         self.settings_window(&ctx);
@@ -4824,25 +4838,16 @@ fn configure_arial_fonts(ctx: &egui::Context) {
         .get(&FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
-    let windows = std::env::var_os("WINDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-    let font_directory = windows.join("Fonts");
-
     let mut regular = fallback.clone();
-    if let Ok(bytes) = fs::read(font_directory.join("arial.ttf")) {
+    if let Some(font) = platform::editor_font(resvg::usvg::fontdb::Weight::NORMAL) {
         let name = "rpp-arial-regular".to_owned();
-        fonts
-            .font_data
-            .insert(name.clone(), Arc::new(FontData::from_owned(bytes)));
+        fonts.font_data.insert(name.clone(), Arc::new(font));
         regular.insert(0, name);
     }
     let mut bold = regular.clone();
-    if let Ok(bytes) = fs::read(font_directory.join("arialbd.ttf")) {
+    if let Some(font) = platform::editor_font(resvg::usvg::fontdb::Weight::BOLD) {
         let name = "rpp-arial-bold".to_owned();
-        fonts
-            .font_data
-            .insert(name.clone(), Arc::new(FontData::from_owned(bytes)));
+        fonts.font_data.insert(name.clone(), Arc::new(font));
         bold.insert(0, name);
     }
     fonts
@@ -4898,10 +4903,13 @@ fn distance_drag(
     minimum_cm: f32,
     maximum_cm: f32,
 ) -> Response {
-    let mut display = unit.from_centimeters(*centimeters);
+    let mut display = unit.display_from_centimeters(*centimeters);
     let response = ui.add(
         egui::DragValue::new(&mut display)
-            .range(unit.from_centimeters(minimum_cm)..=unit.from_centimeters(maximum_cm))
+            .range(
+                unit.display_from_centimeters(minimum_cm)
+                    ..=unit.display_from_centimeters(maximum_cm),
+            )
             .speed(if unit == Unit::M { 0.01 } else { 1.0 })
             .suffix(unit.suffix()),
     );
@@ -5579,21 +5587,15 @@ fn sanitize_asset_name(name: &str) -> String {
 }
 
 fn autosave_path() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|base| base.join("RPP").join("autosave.rpp"))
+    platform::recovery_file()
 }
 
 fn language_path() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|base| base.join("RPP").join("language.txt"))
+    platform::config_file("language.txt")
 }
 
 fn settings_path() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|base| base.join("RPP").join("settings.json"))
+    platform::config_file("settings.json")
 }
 
 fn load_settings() -> AppSettings {
@@ -5654,7 +5656,7 @@ mod tests {
     use super::{
         DraftWall, Selection, cycle_hit_selection, default_image_dimensions, magnet_to_wall,
         normalized_polygon_points, opening_follows_selected_wall, plan_bounds,
-        process_imported_image, scroll_zoom_factor, selectable_selections, selections_in_box,
+        process_imported_image, selectable_selections, selections_in_box,
         toggle_additive_selection, triangulate_polygon, write_plan_safely,
     };
     use crate::model::{
@@ -5663,12 +5665,113 @@ mod tests {
     };
 
     #[test]
-    fn wheel_zoom_is_gentle_and_bounded() {
-        assert_eq!(scroll_zoom_factor(0.0), 1.0);
-        assert!((scroll_zoom_factor(1.0) - 1.05).abs() < f32::EPSILON);
-        assert!((scroll_zoom_factor(-1.0) - (1.0 / 1.05)).abs() < f32::EPSILON);
-        assert_eq!(scroll_zoom_factor(5000.0), scroll_zoom_factor(1.0));
-        assert_eq!(scroll_zoom_factor(-5000.0), scroll_zoom_factor(-1.0));
+    fn pinch_zooms_around_pointer_and_respects_limits() {
+        use eframe::egui::{CentralPanel, Context, Event, RawInput, Rect, Sense, pos2, vec2};
+        let ctx = Context::default();
+        let mut app = super::RppApp::from_context(ctx.clone());
+        let pointer = pos2(320.0, 240.0);
+        let mut run = |events| {
+            let _ = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |root| {
+                    CentralPanel::default().show(root, |ui| {
+                        let rect = ui.available_rect_before_wrap();
+                        let response = ui.allocate_rect(rect, Sense::click_and_drag());
+                        app.handle_canvas_input(&ctx, &response, rect);
+                    });
+                },
+            );
+        };
+        run(vec![Event::PointerMoved(pointer)]);
+        // Establish hover before sending a native macOS pinch event.
+        run(vec![]);
+        drop(run);
+        let initial_zoom = app.zoom;
+        let initial_pan = app.pan;
+        let mut canvas_rect = Rect::NOTHING;
+        for factor in [1.5, 100.0, 0.0001] {
+            let previous_zoom = app.zoom;
+            let previous_pan = app.pan;
+            let _ = ctx.run_ui(
+                RawInput {
+                    events: vec![Event::Zoom(factor)],
+                    ..Default::default()
+                },
+                |root| {
+                    CentralPanel::default().show(root, |ui| {
+                        canvas_rect = ui.available_rect_before_wrap();
+                        let response = ui.allocate_rect(canvas_rect, Sense::click_and_drag());
+                        app.handle_canvas_input(&ctx, &response, canvas_rect);
+                    });
+                },
+            );
+            let before = (pointer - canvas_rect.min - previous_pan) / previous_zoom;
+            let after = (pointer - canvas_rect.min - app.pan) / app.zoom;
+            assert!((before - after).length() < 0.001);
+            assert!(
+                (app.zoom - (previous_zoom * factor).clamp(super::MIN_ZOOM, super::MAX_ZOOM)).abs()
+                    < 0.0001
+            );
+        }
+        assert!(initial_zoom > 0.0);
+        assert_ne!(app.pan, initial_pan);
+    }
+
+    #[test]
+    fn space_drag_pans_without_drawing_even_when_space_is_released_first() {
+        use eframe::egui::{
+            CentralPanel, Context, Event, Key, Modifiers, PointerButton, RawInput, Rect, Sense,
+            pos2, vec2,
+        };
+        let ctx = Context::default();
+        let mut app = super::RppApp::from_context(ctx.clone());
+        let initial_pan = app.pan;
+        let initial_walls = app.plan.walls.len();
+        let key = |pressed| Event::Key {
+            key: Key::Space,
+            physical_key: Some(Key::Space),
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let button = |position, pressed| Event::PointerButton {
+            pos: position,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let frames = [
+            vec![Event::PointerMoved(pos2(300.0, 200.0))],
+            vec![],
+            vec![key(true), button(pos2(300.0, 200.0), true)],
+            vec![Event::PointerMoved(pos2(330.0, 220.0))],
+            vec![key(false)],
+            vec![button(pos2(330.0, 220.0), false)],
+        ];
+        for events in frames {
+            let _ = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+                    events,
+                    ..RawInput::default()
+                },
+                |root| {
+                    CentralPanel::default().show(root, |ui| {
+                        let rect = ui.available_rect_before_wrap();
+                        let response = ui.allocate_rect(rect, Sense::click_and_drag());
+                        app.handle_canvas_input(&ctx, &response, rect);
+                    });
+                },
+            );
+        }
+        assert_eq!(app.plan.walls.len(), initial_walls);
+        assert!(app.draft.is_none());
+        assert!(!app.panning_canvas);
+        assert_eq!(app.pan - initial_pan, vec2(30.0, 20.0));
     }
 
     #[test]
