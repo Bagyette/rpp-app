@@ -40,6 +40,12 @@ impl RppApp {
     fn inspector_contents(&mut self, ui: &mut Ui) {
         ui.heading(egui::RichText::new(self.localizer.text("panel.properties")).size(14.0));
         ui.add_space(14.0);
+        if self.room_detection_limited {
+            ui.colored_label(
+                egui::Color32::from_rgb(160, 90, 20),
+                self.localizer.text("status.room_detection_limit"),
+            );
+        }
         if !self.additional_selections.is_empty() {
             ui.label(
                 egui::RichText::new(self.localizer.format(
@@ -114,10 +120,31 @@ impl RppApp {
             ui.add_space(8.0);
         }
 
-        if self.selection.is_some() && self.additional_selections.is_empty() {
-            self.selected_layer_selector(ui);
+        let primary = self.selection.clone();
+        if let Some(selection) = &primary
+            && self.additional_selections.is_empty()
+        {
+            let mut locked = self.selection_locked(selection);
+            let layer_editable = self
+                .plan
+                .item_editable(super::layers::selection_id(selection));
+            if ui
+                .add_enabled(
+                    layer_editable,
+                    egui::Checkbox::new(&mut locked, self.localizer.text("property.locked")),
+                )
+                .changed()
+            {
+                self.set_selected_locked(locked);
+            }
         }
-
+        let editable = primary
+            .as_ref()
+            .is_none_or(|selection| self.selection_editable(selection));
+        if primary.is_some() && self.additional_selections.is_empty() {
+            ui.add_enabled_ui(editable, |ui| self.selected_layer_selector(ui));
+        }
+        ui.add_enabled_ui(editable, |ui| {
         match self.selection.clone() {
             Some(Selection::Wall(id)) => self.wall_inspector(ui, &id),
             Some(Selection::Line(id)) => self.line_inspector(ui, &id),
@@ -301,6 +328,7 @@ impl RppApp {
             }
         }
 
+        });
         ui.add_space(20.0);
         ui.separator();
         ui.label(
@@ -341,15 +369,7 @@ impl RppApp {
             self.plan.lines[index].color = color;
             self.commit(before);
         }
-        let mut locked = self.plan.lines[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.lines[index].locked = locked;
-            self.commit(before);
-        }
+
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
             self.duplicate_selected();
@@ -380,9 +400,10 @@ impl RppApp {
                 .color(ACCENT),
         );
         let mut content = self.plan.texts[index].text.clone();
-        let response = ui.text_edit_multiline(&mut content);
+        let response = ui.add(egui::TextEdit::multiline(&mut content).char_limit(10_000));
         if response.changed() {
             let before = self.snapshot();
+            crate::model::truncate_text(&mut content, 10_000);
             self.plan.texts[index].text = content;
             self.commit(before);
         }
@@ -443,15 +464,7 @@ impl RppApp {
             self.plan.texts[index].bold = bold;
             self.commit(before);
         }
-        let mut locked = self.plan.texts[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.texts[index].locked = locked;
-            self.commit(before);
-        }
+
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
             self.duplicate_selected();
@@ -507,15 +520,7 @@ impl RppApp {
             self.plan.areas[index].stroke_color = stroke;
             self.commit(before);
         }
-        let mut locked = self.plan.areas[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.areas[index].locked = locked;
-            self.commit(before);
-        }
+
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
             self.duplicate_selected();
@@ -552,6 +557,7 @@ impl RppApp {
         .changed()
         {
             let before = self.snapshot();
+            crate::model::truncate_text(&mut name, 512);
             self.plan.rooms[index].name = name;
             self.commit(before);
         }
@@ -620,16 +626,7 @@ impl RppApp {
             self.plan.rooms[index].fill_visible = visible;
             self.commit(before);
         }
-        let mut locked = self.plan.rooms[index].locked;
-        if property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        })
-        .changed()
-        {
-            let before = self.snapshot();
-            self.plan.rooms[index].locked = locked;
-            self.commit(before);
-        }
+
         if self.plan.rooms[index].source == RoomSource::Manual
             && ui
                 .button(self.localizer.text("action.delete_room"))
@@ -699,15 +696,7 @@ impl RppApp {
             self.plan.compasses[index].color = color;
             self.commit(before);
         }
-        let mut locked = self.plan.compasses[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.compasses[index].locked = locked;
-            self.commit(before);
-        }
+
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
             self.duplicate_selected();
@@ -842,15 +831,6 @@ impl RppApp {
             self.persist_settings();
             self.commit(before);
         }
-        let mut locked = self.plan.walls[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.walls[index].locked = locked;
-            self.commit(before);
-        }
 
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
@@ -900,9 +880,15 @@ impl RppApp {
 
         let mut width = self.plan.doors[index].width;
         let response = property_row(ui, &self.localizer.text("property.width"), |ui| {
-            distance_drag(ui, &mut width, self.unit, 20.0, wall_length.max(20.0))
+            distance_drag(
+                ui,
+                &mut width,
+                self.unit,
+                20.0_f32.min(wall_length.max(0.1)),
+                wall_length.max(0.1),
+            )
         });
-        if response.changed() && wall_length > 0.0 {
+        if response.changed() && wall_length > 0.0 && width <= wall_length {
             width = width.min(wall_length);
             let margin = width / (2.0 * wall_length);
             let position = self.plan.doors[index].t.clamp(margin, 1.0 - margin);
@@ -1019,15 +1005,6 @@ impl RppApp {
             self.plan.doors[index].color = color;
             self.commit(before);
         }
-        let mut locked = self.plan.doors[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.doors[index].locked = locked;
-            self.commit(before);
-        }
 
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
@@ -1071,9 +1048,15 @@ impl RppApp {
 
         let mut width = self.plan.windows[index].width;
         let response = property_row(ui, &self.localizer.text("property.width"), |ui| {
-            distance_drag(ui, &mut width, self.unit, 20.0, wall_length.max(20.0))
+            distance_drag(
+                ui,
+                &mut width,
+                self.unit,
+                20.0_f32.min(wall_length.max(0.1)),
+                wall_length.max(0.1),
+            )
         });
-        if response.changed() && wall_length > 0.0 {
+        if response.changed() && wall_length > 0.0 && width <= wall_length {
             let margin = width / (2.0 * wall_length);
             let position = self.plan.windows[index].t.clamp(margin, 1.0 - margin);
             if self.opening_available(&wall_id, position, width, Some(id)) {
@@ -1147,15 +1130,6 @@ impl RppApp {
             self.plan.windows[index].color = color;
             self.commit(before);
         }
-        let mut locked = self.plan.windows[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.windows[index].locked = locked;
-            self.commit(before);
-        }
 
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
@@ -1195,6 +1169,7 @@ impl RppApp {
         });
         if response.changed() && name.chars().count() <= 512 {
             let before = self.snapshot();
+            crate::model::truncate_text(&mut name, 512);
             self.plan.objects[index].name = name;
             self.commit(before);
         }
@@ -1299,16 +1274,6 @@ impl RppApp {
         if response.changed() {
             let before = self.snapshot();
             self.plan.objects[index].stroke_color = stroke_color;
-            self.commit(before);
-        }
-
-        let mut locked = self.plan.objects[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.objects[index].locked = locked;
             self.commit(before);
         }
 
@@ -1461,15 +1426,6 @@ impl RppApp {
             self.plan.arrows[index].color = color;
             self.commit(before);
         }
-        let mut locked = self.plan.arrows[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.arrows[index].locked = locked;
-            self.commit(before);
-        }
 
         ui.add_space(12.0);
         if ui.button(self.localizer.text("action.duplicate")).clicked() {
@@ -1562,16 +1518,6 @@ impl RppApp {
                 }
                 self.commit(before);
             }
-        }
-
-        let mut locked = self.plan.images[index].locked;
-        let response = property_row(ui, &self.localizer.text("property.locked"), |ui| {
-            ui.checkbox(&mut locked, "")
-        });
-        if response.changed() {
-            let before = self.snapshot();
-            self.plan.images[index].locked = locked;
-            self.commit(before);
         }
 
         ui.add_space(12.0);

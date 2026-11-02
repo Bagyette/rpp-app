@@ -31,7 +31,7 @@ use crate::model::{
     default_opening_color, default_text_color, default_wall_color, default_wall_thickness,
     default_window_color,
 };
-use crate::{export, input, platform};
+use crate::{export, images, input, platform, storage};
 
 const GRID: f32 = 20.0;
 const MIN_WALL: f32 = 20.0;
@@ -237,6 +237,26 @@ impl Default for AppSettings {
             theme: AppTheme::Light,
             scroll_mode: input::ScrollMode::Auto,
         }
+    }
+}
+
+impl AppSettings {
+    fn sanitized(mut self) -> Self {
+        fn bounded(value: f32, minimum: f32, maximum: f32, fallback: f32) -> f32 {
+            if value.is_finite() {
+                value.clamp(minimum, maximum)
+            } else {
+                fallback
+            }
+        }
+        let defaults = Self::default();
+        self.grid_size = bounded(self.grid_size, 0.1, 5000.0, defaults.grid_size);
+        self.wall_thickness = bounded(self.wall_thickness, 0.1, 1000.0, defaults.wall_thickness);
+        self.door_width = bounded(self.door_width, 20.0, 1000.0, defaults.door_width);
+        self.window_width = bounded(self.window_width, 20.0, 1000.0, defaults.window_width);
+        self.text_size = bounded(self.text_size, 1.0, 500.0, defaults.text_size);
+        self.image_limit_index = self.image_limit_index.min(10);
+        self
     }
 }
 
@@ -487,6 +507,7 @@ pub struct RppApp {
     room_drag: Option<RoomDrag>,
     compass_drag: Option<CompassDrag>,
     group_drag: Option<GroupDrag>,
+    batching_edits: bool,
     past: Vec<Snapshot>,
     future: Vec<Snapshot>,
     zoom: f32,
@@ -499,6 +520,9 @@ pub struct RppApp {
     localizer: Localizer,
     status: String,
     current_file: Option<PathBuf>,
+    recovery_path: Option<PathBuf>,
+    recovery_error: Option<String>,
+    room_detection_limited: bool,
     dirty: bool,
     pending_action: Option<PendingAction>,
     export_distances: bool,
@@ -580,7 +604,7 @@ impl RppApp {
     }
 
     fn from_context(context: egui::Context) -> Self {
-        let settings = load_settings();
+        let settings = load_settings().sanitized();
         configure_style(&context, settings.theme);
         let mut localizer = Localizer::load();
         if let Some(path) = language_path()
@@ -631,6 +655,7 @@ impl RppApp {
             room_drag: None,
             compass_drag: None,
             group_drag: None,
+            batching_edits: false,
             past: Vec::new(),
             future: Vec::new(),
             zoom: 1.0,
@@ -643,6 +668,9 @@ impl RppApp {
             localizer,
             status: initial_status,
             current_file: None,
+            recovery_path: autosave_path(),
+            recovery_error: None,
+            room_detection_limited: false,
             dirty: false,
             pending_action: None,
             export_distances: true,
@@ -664,8 +692,8 @@ impl RppApp {
         };
 
         app.rebuild_textures(&context);
-        if let Some(path) = autosave_path()
-            && let Ok(bytes) = fs::read(path)
+        if let Some(path) = &app.recovery_path
+            && let Ok(bytes) = storage::read_limited(path, crate::format::MAX_PROJECT_BYTES)
             && let Ok(decoded) = decode_plan(&bytes)
         {
             app.plan = decoded.plan;
@@ -692,9 +720,150 @@ impl RppApp {
         items
     }
 
+    fn selection_locked(&self, selection: &Selection) -> bool {
+        match selection {
+            Selection::Wall(id) => self
+                .plan
+                .walls
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Line(id) => self
+                .plan
+                .lines
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Text(id) => self
+                .plan
+                .texts
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Door(id) => self
+                .plan
+                .doors
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Window(id) => self
+                .plan
+                .windows
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Image(id) => self
+                .plan
+                .images
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Object(id) => self
+                .plan
+                .objects
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Area(id) => self
+                .plan
+                .areas
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Room(id) => self
+                .plan
+                .rooms
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Compass(id) => self
+                .plan
+                .compasses
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+            Selection::Arrow(id) => self
+                .plan
+                .arrows
+                .iter()
+                .find(|item| &item.id == id)
+                .is_none_or(|item| item.locked),
+        }
+    }
+
+    fn selection_editable(&self, selection: &Selection) -> bool {
+        self.plan.item_editable(layers::selection_id(selection))
+            && !self.selection_locked(selection)
+    }
+
+    fn has_active_drag(&self) -> bool {
+        self.wall_drag.is_some()
+            || self.line_drag.is_some()
+            || self.text_drag.is_some()
+            || self.door_drag.is_some()
+            || self.window_drag.is_some()
+            || self.image_drag.is_some()
+            || self.object_drag.is_some()
+            || self.arrow_drag.is_some()
+            || self.area_drag.is_some()
+            || self.room_drag.is_some()
+            || self.compass_drag.is_some()
+            || self.group_drag.is_some()
+    }
+
+    fn cancel_interaction(&mut self) {
+        let before = self
+            .wall_drag
+            .as_ref()
+            .map(|drag| drag.before.clone())
+            .or_else(|| self.line_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.text_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.door_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.window_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.image_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.object_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.arrow_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.area_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.room_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.compass_drag.as_ref().map(|drag| drag.before.clone()))
+            .or_else(|| self.group_drag.as_ref().map(|drag| drag.before.clone()));
+        if let Some(before) = before {
+            before.restore(&mut self.plan, &mut self.assets);
+        }
+        self.clear_interaction();
+    }
+
+    fn clear_interaction(&mut self) {
+        self.draft = None;
+        self.line_draft = None;
+        self.arrow_draft = None;
+        self.measurement = None;
+        self.selection_box = None;
+        self.area_draft.clear();
+        self.room_draft.clear();
+        self.wall_press_origin = None;
+        self.wall_press_created_draft = false;
+        self.wall_drag = None;
+        self.line_drag = None;
+        self.text_drag = None;
+        self.door_drag = None;
+        self.window_drag = None;
+        self.image_drag = None;
+        self.object_drag = None;
+        self.arrow_drag = None;
+        self.area_drag = None;
+        self.room_drag = None;
+        self.compass_drag = None;
+        self.group_drag = None;
+        self.panning_canvas = false;
+    }
+
     fn set_selected_locked(&mut self, locked: bool) {
         let before = self.snapshot();
         for selection in self.selected_items() {
+            if !self.plan.item_editable(layers::selection_id(&selection)) {
+                continue;
+            }
             match selection {
                 Selection::Wall(id) => {
                     if let Some(item) = self.plan.walls.iter_mut().find(|item| item.id == id) {
@@ -759,6 +928,9 @@ impl RppApp {
     fn set_selected_color(&mut self, color: [u8; 3]) {
         let before = self.snapshot();
         for selection in self.selected_items() {
+            if !self.selection_editable(&selection) {
+                continue;
+            }
             match selection {
                 Selection::Wall(id) => self
                     .plan
@@ -1011,29 +1183,17 @@ impl RppApp {
     fn nudge_selected(&mut self, delta: Point) {
         if !self.additional_selections.is_empty() {
             let before = self.snapshot();
-            let history_len = self.past.len();
-            let primary = self.selection.clone();
-            let additional = self.additional_selections.clone();
-            let mut selections = additional.clone();
-            if let Some(selection) = primary.clone() {
-                selections.insert(0, selection);
-            }
-            self.additional_selections.clear();
-            for selection in selections
+            let selections = self.selected_items();
+            let movable = selections
                 .iter()
                 .filter(|selection| {
                     !opening_follows_selected_wall(&self.plan, selection, &selections)
                 })
                 .cloned()
-                .collect::<Vec<_>>()
-            {
-                self.selection = Some(selection);
-                self.nudge_selected(delta);
+                .collect::<Vec<_>>();
+            for selection in movable {
+                self.translate_selection(&selection, delta);
             }
-            self.past.truncate(history_len);
-            self.future.clear();
-            self.selection = primary;
-            self.additional_selections = additional;
             self.commit(before);
             self.status = self.localizer.text("status.items_moved");
             return;
@@ -1041,6 +1201,9 @@ impl RppApp {
         let Some(selection) = self.selection.clone() else {
             return;
         };
+        if !self.selection_editable(&selection) {
+            return;
+        }
         let before = self.snapshot();
         let mut moved = false;
 
@@ -1272,7 +1435,13 @@ impl RppApp {
         else {
             return false;
         };
-        if width <= 0.0 || width > length {
+        if !width.is_finite()
+            || !position.is_finite()
+            || !length.is_finite()
+            || length <= 0.0
+            || width <= 0.0
+            || width > length
+        {
             return false;
         }
         let half_span = width / (2.0 * length);
@@ -1311,6 +1480,9 @@ impl RppApp {
             .iter()
             .find(|wall| wall.id == wall_id)
             .map(Wall::length)?;
+        if !width.is_finite() || width <= 0.0 || width > length || !preferred.is_finite() {
+            return None;
+        }
         let margin = width / (2.0 * length);
         (0..=20)
             .flat_map(|step| {
@@ -1322,8 +1494,26 @@ impl RppApp {
     }
 
     fn commit(&mut self, before: Snapshot) {
-        if before.walls != self.plan.walls {
+        if self.batching_edits {
+            return;
+        }
+        if before.walls.len() != self.plan.walls.len()
+            || before
+                .walls
+                .iter()
+                .zip(&self.plan.walls)
+                .any(|(before, after)| {
+                    before.start() != after.start() || before.end() != after.end()
+                })
+        {
             self.refresh_automatic_rooms();
+        }
+        self.plan.prune_layer_assignments();
+        if let Err(error) = crate::format::validate_plan(&self.plan) {
+            before.restore(&mut self.plan, &mut self.assets);
+            self.rebuild_textures(&self.context.clone());
+            self.status = self.format_error_text(&error);
+            return;
         }
         let after = self.snapshot();
         if before != after {
@@ -1374,19 +1564,26 @@ impl RppApp {
         }
     }
 
-    fn autosave(&self) {
-        let Some(path) = autosave_path() else {
+    fn autosave(&mut self) {
+        let Some(path) = &self.recovery_path else {
             return;
         };
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if let Ok(binary) = encode_project(&self.plan, self.assets.as_slice()) {
-            let _ = fs::write(path, binary);
-        }
+        let result = encode_project(&self.plan, self.assets.as_slice())
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                storage::write_atomic(path, &bytes).map_err(|error| error.to_string())
+            });
+        self.recovery_error = result.err().map(|error| {
+            self.localizer
+                .format("status.autosave_error", &[("error", error)])
+        });
     }
 
     fn undo(&mut self) {
+        self.cancel_interaction();
         let Some(previous) = self.past.pop() else {
             return;
         };
@@ -1396,6 +1593,7 @@ impl RppApp {
         if assets_changed {
             self.rebuild_textures(&self.context.clone());
         }
+        self.clear_interaction();
         self.selection = None;
         self.additional_selections.clear();
         self.dirty = true;
@@ -1404,6 +1602,7 @@ impl RppApp {
     }
 
     fn redo(&mut self) {
+        self.cancel_interaction();
         let Some(next) = self.future.pop() else {
             return;
         };
@@ -1413,6 +1612,7 @@ impl RppApp {
         if assets_changed {
             self.rebuild_textures(&self.context.clone());
         }
+        self.clear_interaction();
         self.selection = None;
         self.additional_selections.clear();
         self.dirty = true;
@@ -1423,18 +1623,13 @@ impl RppApp {
     fn new_plan(&mut self) {
         self.plan = PlanFile::default();
         self.active_layer_id = DEFAULT_LAYER_ID.to_owned();
+        self.room_detection_limited = false;
         self.assets = Arc::new(Vec::new());
         self.textures.clear();
         self.selection = None;
         self.additional_selections.clear();
-        self.draft = None;
-        self.line_draft = None;
-        self.measurement = None;
-        self.area_draft.clear();
-        self.line_drag = None;
-        self.text_drag = None;
-        self.area_drag = None;
-        self.compass_drag = None;
+        self.clear_interaction();
+        self.rebuild_textures(&self.context.clone());
         self.current_file = None;
         self.past.clear();
         self.future.clear();
@@ -1481,29 +1676,26 @@ impl RppApp {
         let Some(action) = self.pending_action.clone() else {
             return;
         };
-        egui::Window::new(self.localizer.text("dialog.unsaved_title"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label(self.localizer.text("dialog.unsaved_body"));
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button(self.localizer.text("action.save")).clicked() {
-                        self.save_plan();
-                        if !self.dirty {
-                            self.run_pending_action(ctx, action.clone());
-                        }
-                    }
-                    if ui.button(self.localizer.text("action.discard")).clicked() {
-                        self.dirty = false;
+        egui::Modal::new(egui::Id::new("unsaved-changes")).show(ctx, |ui| {
+            ui.heading(self.localizer.text("dialog.unsaved_title"));
+            ui.label(self.localizer.text("dialog.unsaved_body"));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(self.localizer.text("action.save")).clicked() {
+                    self.save_plan();
+                    if !self.dirty {
                         self.run_pending_action(ctx, action.clone());
                     }
-                    if ui.button(self.localizer.text("action.cancel")).clicked() {
-                        self.pending_action = None;
-                    }
-                });
+                }
+                if ui.button(self.localizer.text("action.discard")).clicked() {
+                    self.dirty = false;
+                    self.run_pending_action(ctx, action.clone());
+                }
+                if ui.button(self.localizer.text("action.cancel")).clicked() {
+                    self.pending_action = None;
+                }
             });
+        });
     }
 
     fn open_plan(&mut self) {
@@ -1521,7 +1713,7 @@ impl RppApp {
     }
 
     fn open_path(&mut self, path: PathBuf) {
-        match fs::read(&path) {
+        match storage::read_limited(&path, crate::format::MAX_PROJECT_BYTES) {
             Ok(bytes) => match decode_plan(&bytes) {
                 Ok(decoded) => {
                     let needs_conversion = decoded.needs_conversion;
@@ -1533,11 +1725,7 @@ impl RppApp {
                     self.rebuild_textures(&context);
                     self.selection = None;
                     self.additional_selections.clear();
-                    self.draft = None;
-                    self.line_draft = None;
-                    self.arrow_draft = None;
-                    self.area_draft.clear();
-                    self.room_draft.clear();
+                    self.clear_interaction();
                     self.past.clear();
                     self.future.clear();
                     self.current_file = Some(path.clone());
@@ -1708,9 +1896,10 @@ impl RppApp {
     }
 
     fn save_to(&mut self, path: PathBuf) {
-        match encode_project(&self.plan, self.assets.as_slice()).and_then(|bytes| {
-            write_plan_safely(&path, &bytes).map_err(|_| crate::format::FormatError::Corrupted)
-        }) {
+        let result = encode_project(&self.plan, self.assets.as_slice())
+            .map_err(|error| self.format_error_text(&error))
+            .and_then(|bytes| write_plan_safely(&path, &bytes).map_err(|error| error.to_string()));
+        match result {
             Ok(()) => {
                 self.current_file = Some(path.clone());
                 self.dirty = false;
@@ -1719,7 +1908,6 @@ impl RppApp {
                     .format("status.saved", &[("path", path.display().to_string())]);
             }
             Err(error) => {
-                let error = self.format_error_text(&error);
                 self.status = self
                     .localizer
                     .format("status.save_error", &[("error", error)])
@@ -1737,7 +1925,7 @@ impl RppApp {
         else {
             return;
         };
-        let Ok(bytes) = fs::read(&path) else {
+        let Ok(bytes) = storage::read_limited(&path, images::MAX_ENCODED_BYTES) else {
             self.status = self.localizer.text("status.image_read_error");
             return;
         };
@@ -1765,6 +1953,19 @@ impl RppApp {
         {
             self.place_image_instance(&asset_id, pixel_width, pixel_height);
             self.status = self.localizer.text("status.image_reused");
+            return;
+        }
+
+        let decoded_total: u64 = self
+            .assets
+            .iter()
+            .filter_map(|asset| images::decoded_byte_len(&asset.bytes))
+            .sum();
+        if self.assets.len() >= 256
+            || decoded_total + u64::from(pixel_width) * u64::from(pixel_height) * 4
+                > images::MAX_DECODED_BYTES
+        {
+            self.status = self.localizer.text("status.image_too_large");
             return;
         }
 
@@ -1866,8 +2067,12 @@ impl RppApp {
             return;
         };
         let mut selections = vec![primary];
-        selections.append(&mut self.additional_selections);
+        selections.extend(self.additional_selections.clone());
+        selections.retain(|selection| self.selection_editable(selection));
         let removed_count = selections.len();
+        if selections.is_empty() {
+            return;
+        }
         let before = self.snapshot();
         for selection in selections {
             match selection {
@@ -1960,7 +2165,7 @@ impl RppApp {
     fn duplicate_selected(&mut self) {
         if !self.additional_selections.is_empty() {
             let before = self.snapshot();
-            let history_len = self.past.len();
+            self.batching_edits = true;
             let mut selections = self.additional_selections.clone();
             if let Some(primary) = self.selection.clone() {
                 selections.insert(0, primary);
@@ -1968,14 +2173,15 @@ impl RppApp {
             self.additional_selections.clear();
             let mut created = Vec::new();
             for selection in selections {
-                self.selection = Some(selection);
+                self.selection = Some(selection.clone());
                 self.duplicate_selected();
-                if let Some(new_selection) = self.selection.clone() {
+                if let Some(new_selection) = self.selection.clone()
+                    && new_selection != selection
+                {
                     created.push(new_selection);
                 }
             }
-            self.past.truncate(history_len);
-            self.future.clear();
+            self.batching_edits = false;
             self.selection = created.first().cloned();
             self.additional_selections = created.into_iter().skip(1).collect();
             self.commit(before);
@@ -2197,6 +2403,9 @@ impl RppApp {
         let Some(index) = self.plan.walls.iter().position(|wall| wall.id == id) else {
             return;
         };
+        if !self.selection_editable(&Selection::Wall(id.clone())) {
+            return;
+        }
         let original = self.plan.walls[index].clone();
         if original.length() / 2.0 < MIN_WALL {
             self.status = self.localizer.text("status.wall_too_short");
@@ -2341,24 +2550,10 @@ impl RppApp {
         if self.tool != previous_tool && !actions.select_all {
             self.additional_selections.clear();
         }
+        if self.tool != previous_tool || actions.escape {
+            self.cancel_interaction();
+        }
         if actions.escape {
-            self.draft = None;
-            self.line_draft = None;
-            self.measurement = None;
-            self.selection_box = None;
-            self.area_draft.clear();
-            self.room_draft.clear();
-            self.wall_press_origin = None;
-            self.wall_drag = None;
-            self.line_drag = None;
-            self.text_drag = None;
-            self.area_drag = None;
-            self.room_drag = None;
-            self.compass_drag = None;
-            self.door_drag = None;
-            self.window_drag = None;
-            self.image_drag = None;
-            self.object_drag = None;
             self.selection = None;
             self.additional_selections.clear();
         }
@@ -2780,13 +2975,7 @@ impl RppApp {
             "Y",
         );
         if self.tool != previous_tool {
-            self.draft = None;
-            self.line_draft = None;
-            self.measurement = None;
-            self.arrow_draft = None;
-            self.area_draft.clear();
-            self.room_draft.clear();
-            self.wall_press_origin = None;
+            self.cancel_interaction();
             self.additional_selections.clear();
         }
     }
@@ -2801,10 +2990,26 @@ impl RppApp {
             )
             .show(root, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(self.localizer.text(self.tool.instruction_key()))
-                            .size(11.0)
-                            .color(self.muted_text_color()),
+                    let status = self.recovery_error.as_deref().unwrap_or(&self.status);
+                    ui.allocate_ui(
+                        Vec2::new(ui.available_width() * 0.42, ui.available_height()),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(status).size(11.0).color(
+                                    if self.recovery_error.is_some() {
+                                        Color32::from_rgb(180, 45, 45)
+                                    } else {
+                                        self.muted_text_color()
+                                    },
+                                ))
+                                .truncate(),
+                            )
+                            .on_hover_text(format!(
+                                "{}\n{}",
+                                status,
+                                self.localizer.text(self.tool.instruction_key())
+                            ));
+                        },
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let counts = self.localizer.format(
@@ -2938,7 +3143,7 @@ impl RppApp {
                         .hover_pos()
                         .is_some_and(|position| zoom_rect.contains(position))
                 });
-                if !input_blocked && !over_zoom_controls {
+                if !input_blocked && (!over_zoom_controls || self.has_active_drag()) {
                     self.handle_canvas_input(&ctx, &response, rect);
                 }
                 self.paint_canvas(&painter, rect);
@@ -2992,8 +3197,10 @@ impl RppApp {
             }
         }
 
-        let space_down =
-            !ctx.egui_wants_keyboard_input() && ctx.input(|input| input.key_down(Key::Space));
+        let navigation_allowed = !self.has_active_drag();
+        let space_down = navigation_allowed
+            && !ctx.egui_wants_keyboard_input()
+            && ctx.input(|input| input.key_down(Key::Space));
         if space_down
             && response.is_pointer_button_down_on()
             && ctx.input(|input| input.pointer.primary_down())
@@ -3007,12 +3214,13 @@ impl RppApp {
                 self.panning_canvas = false;
             }
         }
-        if !panning && response.dragged_by(PointerButton::Middle) {
+        if navigation_allowed && !panning && response.dragged_by(PointerButton::Middle) {
             self.pan += response.drag_delta();
         }
         if space_down
             || panning
-            || ctx.input(|input| input.pointer.button_down(PointerButton::Middle))
+            || navigation_allowed
+                && ctx.input(|input| input.pointer.button_down(PointerButton::Middle))
         {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             return;
@@ -3575,6 +3783,13 @@ impl RppApp {
     }
 
     fn begin_selected_drag(&mut self, pointer: Point) -> bool {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| !self.selection_editable(selection))
+        {
+            return true;
+        }
         let threshold = 14.0 / self.zoom;
         let selection = self.selection.clone();
         let selected_is_hit = match &selection {
@@ -3731,6 +3946,9 @@ impl RppApp {
     }
 
     fn translate_selection(&mut self, selection: &Selection, delta: Point) {
+        if !self.selection_editable(selection) {
+            return;
+        }
         match selection {
             Selection::Wall(id) => {
                 if let Some(item) = self.plan.walls.iter_mut().find(|item| &item.id == id)
@@ -4751,8 +4969,18 @@ impl RppApp {
 }
 
 impl eframe::App for RppApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.cancel_interaction();
+        if self.dirty {
+            self.autosave();
+        }
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if !ctx.input(|input| input.focused) {
+            self.cancel_interaction();
+        }
         if ctx.input(|input| input.viewport().close_requested()) && self.dirty {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_action = Some(PendingAction::Close);
@@ -5443,13 +5671,7 @@ fn plan_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
 }
 
 fn decode_image(bytes: &[u8]) -> Result<(ColorImage, u32, u32), image::ImageError> {
-    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(256 * 1024 * 1024);
-    reader.limits(limits);
-    let rgba = reader.decode()?.to_rgba8();
+    let rgba = images::decode(bytes)?.to_rgba8();
     let (width, height) = rgba.dimensions();
     let color_image =
         ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba.as_raw());
@@ -5462,7 +5684,7 @@ fn process_imported_image(
 ) -> Result<(Vec<u8>, String, ColorImage, u32, u32), image::ImageError> {
     use image::{DynamicImage, GenericImageView, ImageEncoder, imageops::FilterType};
 
-    let decoded = image::load_from_memory(source)?;
+    let decoded = images::decode(source)?;
     if limit.is_none() {
         let (color, width, height) = decode_image(source)?;
         let extension = image::guess_format(source)
@@ -5600,7 +5822,7 @@ fn settings_path() -> Option<PathBuf> {
 
 fn load_settings() -> AppSettings {
     settings_path()
-        .and_then(|path| fs::read(path).ok())
+        .and_then(|path| storage::read_limited(&path, 64 * 1024).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
@@ -5613,7 +5835,7 @@ fn save_settings(settings: &AppSettings) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(bytes) = serde_json::to_vec_pretty(settings) {
-        let _ = fs::write(path, bytes);
+        let _ = storage::write_atomic(&path, &bytes);
     }
 }
 
@@ -5624,31 +5846,11 @@ fn save_language(language: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let _ = fs::write(path, language);
+    let _ = storage::write_atomic(&path, language.as_bytes());
 }
 
 fn write_plan_safely(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    let temporary = path.with_extension("rpp.tmp");
-    let backup = path.with_extension("rpp.bak");
-    {
-        use std::io::Write;
-        let mut file = fs::File::create(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    if path.exists() {
-        if backup.exists() {
-            fs::remove_file(&backup)?;
-        }
-        fs::rename(path, &backup)?;
-    }
-    if let Err(error) = fs::rename(&temporary, path) {
-        if backup.exists() && !path.exists() {
-            let _ = fs::rename(&backup, path);
-        }
-        return Err(error);
-    }
-    Ok(())
+    storage::write_with_backup(path, bytes)
 }
 
 #[cfg(test)]
@@ -5664,11 +5866,19 @@ mod tests {
         WallKind,
     };
 
+    fn test_app(context: eframe::egui::Context) -> super::RppApp {
+        let mut app = super::RppApp::from_context(context);
+        app.recovery_path = None;
+        app.plan = PlanFile::default();
+        app.dirty = false;
+        app
+    }
+
     #[test]
     fn pinch_zooms_around_pointer_and_respects_limits() {
         use eframe::egui::{CentralPanel, Context, Event, RawInput, Rect, Sense, pos2, vec2};
         let ctx = Context::default();
-        let mut app = super::RppApp::from_context(ctx.clone());
+        let mut app = test_app(ctx.clone());
         let pointer = pos2(320.0, 240.0);
         let mut run = |events| {
             let _ = ctx.run_ui(
@@ -5728,7 +5938,7 @@ mod tests {
             pos2, vec2,
         };
         let ctx = Context::default();
-        let mut app = super::RppApp::from_context(ctx.clone());
+        let mut app = test_app(ctx.clone());
         let initial_pan = app.pan;
         let initial_walls = app.plan.walls.len();
         let key = |pressed| Event::Key {
@@ -6096,5 +6306,189 @@ mod tests {
         assert!(!path.with_extension("rpp.tmp").exists());
         assert!(!path.with_extension("rpp.bak").exists());
         let _ = std::fs::remove_dir_all(folder);
+    }
+
+    fn audit_wall(id: &str, x1: f32, y1: f32, x2: f32, y2: f32) -> Wall {
+        Wall {
+            id: id.to_owned(),
+            x1,
+            y1,
+            x2,
+            y2,
+            thickness: 14.0,
+            kind: WallKind::Interior,
+            color: [52, 56, 59],
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn locked_items_and_locked_layers_resist_delete_nudge_and_split() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan
+            .walls
+            .push(audit_wall("protected", 0.0, 0.0, 200.0, 0.0));
+        app.selection = Some(Selection::Wall("protected".to_owned()));
+        app.plan.walls[0].locked = true;
+        let original = app.plan.clone();
+        app.nudge_selected(Point::new(10.0, 0.0));
+        app.split_selected_wall();
+        app.remove_selected();
+        assert_eq!(app.plan, original);
+        app.plan.walls[0].locked = false;
+        app.plan.layers[0].locked = true;
+        let original = app.plan.clone();
+        app.nudge_selected(Point::new(10.0, 0.0));
+        app.split_selected_wall();
+        app.remove_selected();
+        assert_eq!(app.plan, original);
+        assert!(app.past.is_empty());
+    }
+
+    #[test]
+    fn grouped_nudge_evicts_only_one_history_entry_at_capacity() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan.walls = vec![
+            audit_wall("a", 0.0, 0.0, 200.0, 0.0),
+            audit_wall("b", 0.0, 50.0, 200.0, 50.0),
+        ];
+        app.selection = Some(Selection::Wall("a".to_owned()));
+        app.additional_selections
+            .push(Selection::Wall("b".to_owned()));
+        for index in 0..100 {
+            let mut snapshot = app.snapshot();
+            snapshot.walls[0].color = [index, 0, 0];
+            app.past.push(snapshot);
+        }
+        app.nudge_selected(Point::new(1.0, 0.0));
+        assert_eq!(app.past.len(), 100);
+        assert_eq!(app.past[0].walls[0].color, [1, 0, 0]);
+        assert_eq!(app.plan.walls[0].x1, 1.0);
+        app.undo();
+        assert_eq!(app.plan.walls[0].x1, 0.0);
+        assert_eq!(app.plan.walls[1].x1, 0.0);
+    }
+
+    #[test]
+    fn invalid_edits_roll_back_without_changing_history() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan.walls.push(audit_wall("a", 0.0, 0.0, 200.0, 0.0));
+        let before = app.snapshot();
+        app.plan.walls[0].x1 = f32::NAN;
+        app.commit(before);
+        assert_eq!(app.plan.walls[0].x1, 0.0);
+        assert!(app.past.is_empty());
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn cancelling_a_drag_restores_its_preview_and_new_plan_resets_every_tool() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan.walls.push(audit_wall("a", 0.0, 0.0, 200.0, 0.0));
+        let before = app.snapshot();
+        app.group_drag = Some(super::GroupDrag {
+            selections: vec![Selection::Wall("a".into())],
+            last_pointer: Point::default(),
+            before,
+        });
+        app.plan.walls[0].x1 = 20.0;
+        app.cancel_interaction();
+        assert_eq!(app.plan.walls[0].x1, 0.0);
+        app.arrow_draft = Some(DraftWall {
+            start: Point::default(),
+            end: Point::new(20.0, 20.0),
+        });
+        app.room_draft.push(Point::new(1.0, 1.0));
+        app.panning_canvas = true;
+        app.new_plan();
+        assert!(app.plan.walls.is_empty());
+        assert!(app.arrow_draft.is_none());
+        assert!(app.room_draft.is_empty());
+        assert!(!app.panning_canvas);
+        assert!(app.textures.contains_key(super::BUILTIN_EMERGENCY_EXIT_ID));
+    }
+
+    #[test]
+    fn automatic_room_metadata_keeps_its_layer_after_geometry_changes() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan.walls = vec![
+            audit_wall("a", 0.0, 0.0, 200.0, 0.0),
+            audit_wall("b", 200.0, 0.0, 200.0, 200.0),
+            audit_wall("c", 200.0, 200.0, 0.0, 200.0),
+            audit_wall("d", 0.0, 200.0, 0.0, 0.0),
+        ];
+        app.refresh_automatic_rooms();
+        app.plan.layers.push(crate::model::Layer {
+            id: "rooms".into(),
+            name: "Rooms".into(),
+            ..crate::model::Layer::default()
+        });
+        app.plan.rooms[0].name = "Kitchen".into();
+        let old_id = app.plan.rooms[0].id.clone();
+        app.plan.assign_to_layer(&old_id, "rooms");
+        for wall in &mut app.plan.walls {
+            wall.x1 += 10.0;
+            wall.x2 += 10.0;
+        }
+        app.refresh_automatic_rooms();
+        assert_ne!(app.plan.rooms[0].id, old_id);
+        assert_eq!(app.plan.rooms[0].name, "Kitchen");
+        assert_eq!(app.plan.layer_id_for(&app.plan.rooms[0].id), "rooms");
+        assert!(crate::format::validate_plan(&app.plan).is_ok());
+    }
+
+    #[test]
+    fn malformed_settings_are_sanitized_and_recovery_errors_persist() {
+        let settings = super::AppSettings {
+            grid_size: 0.0,
+            wall_thickness: f32::NAN,
+            text_size: -1.0,
+            ..super::AppSettings::default()
+        }
+        .sanitized();
+        assert!(settings.grid_size > 0.0);
+        assert!(settings.wall_thickness.is_finite());
+        assert!(settings.text_size >= 1.0);
+        let mut app = test_app(eframe::egui::Context::default());
+        let directory = tempfile::tempdir().expect("test directory");
+        app.recovery_path = Some(directory.path().to_path_buf());
+        app.autosave();
+        assert!(app.recovery_error.is_some());
+        app.recovery_path = Some(directory.path().join("autosave.rpp"));
+        app.autosave();
+        assert!(app.recovery_error.is_none());
+    }
+    #[test]
+    fn invalid_opening_widths_and_locked_layer_drag_do_not_panic_or_modify() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan.walls.push(audit_wall("tiny", 0.0, 0.0, 5.0, 0.0));
+        assert_eq!(app.find_opening_position("tiny", 20.0, 0.5), None);
+        assert!(!app.opening_available("tiny", f32::NAN, 1.0, None));
+        app.selection = Some(Selection::Wall("tiny".into()));
+        app.plan.layers[0].locked = true;
+        assert!(app.begin_selected_drag(Point::new(0.0, 0.0)));
+        assert!(app.wall_drag.is_none());
+    }
+    #[test]
+    fn grouped_duplication_is_one_undo_step_at_capacity() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan.walls = vec![
+            audit_wall("a", 0.0, 0.0, 200.0, 0.0),
+            audit_wall("b", 0.0, 50.0, 200.0, 50.0),
+        ];
+        app.selection = Some(Selection::Wall("a".into()));
+        app.additional_selections.push(Selection::Wall("b".into()));
+        for index in 0..100 {
+            let mut snapshot = app.snapshot();
+            snapshot.walls[0].color = [index, 0, 0];
+            app.past.push(snapshot);
+        }
+        app.duplicate_selected();
+        assert_eq!(app.plan.walls.len(), 4);
+        assert_eq!(app.past.len(), 100);
+        assert_eq!(app.past[0].walls[0].color, [1, 0, 0]);
+        assert!(!app.batching_edits);
+        app.undo();
+        assert_eq!(app.plan.walls.len(), 2);
     }
 }

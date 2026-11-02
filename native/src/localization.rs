@@ -22,7 +22,7 @@ pub struct Localizer {
 impl Localizer {
     pub fn load() -> Self {
         let catalog: Catalog =
-            serde_yaml::from_str(include_str!("../lang.yaml")).expect("valid language catalog");
+            serde_saphyr::from_str(include_str!("../lang.yaml")).expect("valid language catalog");
         let current_language = catalog.default_language.clone();
         Self {
             catalog,

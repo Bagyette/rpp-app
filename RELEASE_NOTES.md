@@ -1,25 +1,30 @@
-RPP 0.9.0 adds native macOS and Linux builds alongside Windows, using the same
-Rust editor code and the existing `.rpp` project format.
+RPP 0.9.1 fixes data-integrity, editing and export problems found during a source
+and interactive audit of 0.9.0. All platforms continue to use the same Rust code.
 
-Changes:
-- Native user directories for preferences, language and recovery, preserving the
-  existing Windows storage location.
-- System font lookup and bundled fallbacks shared by canvas text and PNG/PDF
-  exports, without hardcoded Windows font paths.
-- Trackpad pan, pointer-anchored pinch zoom, middle-button and Space+drag pan,
-  Shift+wheel horizontal pan, Alt/Option+scroll zoom, and a scrolling mode setting.
-- Command shortcuts on macOS and Ctrl shortcuts on Windows/Linux, logical
-  AZERTY/QWERTY letters, text-field protection, new/open and view shortcuts.
-- Scrollable Properties and tool panels, plus protection against canvas input
-  while a confirmation or settings dialog is open.
-- Command-line and drag-and-drop project opening with unsaved-change protection.
-- Rust style review, explicit imports, strict Clippy checks and multi-platform CI.
+Fixes:
+- Atomic project, recovery, preferences and export writes, with unique temporary
+  files and preservation of the previous project if backup/replacement fails.
+- Bounded disk reads, ZIP expansion and legacy decompression; shared raster
+  decoder limits and a cumulative decoded-image memory budget.
+- Locked objects and layers are protected from deletion, nudging, splitting and
+  stale-selection drags. The unlock control remains visible above properties.
+- Group actions preserve older undo entries. Cancelled drags restore their
+  preview, and new/open/undo reset every transient tool state.
+- Invalid edits roll back, orphan layer assignments are removed, text limits
+  preserve UTF-8, and malformed settings cannot introduce invalid geometry.
+- Automatic room metadata retains its layer after geometry changes. Detection
+  has a bounded work budget and retains existing rooms if that budget is exceeded.
+- Exports follow layer order, hide openings whose parent wall is hidden, include
+  thick wall extents and handle XML control characters safely.
+- Layer lookups are indexed for rendering/export, and layer opacity is applied
+  once to the whole canvas layer.
+- Save/recovery errors are visible in the status bar. Native application exit
+  writes recovery for committed unsaved changes.
+- Updated ZIP, browser integration, SVG/text rendering and YAML dependencies;
+  removed unused legacy dependency features and withdrawn dependency versions.
+- Release packages verify binary architecture. Publication uploads to a draft
+  first and only publishes after all platform and dependency checks succeed.
 
-Downloads include Windows x64, Linux x64, macOS Apple Silicon and macOS Intel,
-plus SHA-256 checksums. The Linux build targets Ubuntu 24.04-compatible systems.
-Windows binaries are unsigned; macOS apps use an ad-hoc signature and are not
-Apple notarized. Native pinch availability depends on the OS/windowing backend;
-modified scrolling and keyboard/on-screen controls provide alternatives.
-
-Automated build and regression checks run on each platform. Physical testing of
-every mouse, trackpad, keyboard layout and Linux desktop is not claimed.
+See AUDIT.md for verification and practical limits. Windows binaries are unsigned;
+macOS apps have an ad-hoc signature and are not Apple notarized. Native pinch
+availability depends on the OS, driver and windowing backend.

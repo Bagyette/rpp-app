@@ -24,6 +24,7 @@ impl RppApp {
             .open(&mut open)
             .default_width(360.0)
             .resizable(true)
+            .vscroll(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button(self.localizer.text("layers.add")).clicked() {
@@ -84,6 +85,7 @@ impl RppApp {
                 }
                 if changed {
                     for layer in &mut self.plan.layers {
+                        crate::model::truncate_text(&mut layer.name, 256);
                         if layer.name.trim().is_empty() {
                             layer.name = self.localizer.text("layers.unnamed");
                         }

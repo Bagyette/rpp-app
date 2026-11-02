@@ -7,11 +7,13 @@
 mod app;
 mod export;
 mod format;
+mod images;
 mod input;
 mod localization;
 mod model;
 mod platform;
 mod room_detection;
+mod storage;
 
 use app::RppApp;
 use eframe::egui;

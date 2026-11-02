@@ -4,7 +4,7 @@ use std::io::{Cursor, Read, Write};
 use std::str::FromStr;
 use std::{fmt, str};
 
-use miniz_oxide::inflate::decompress_to_vec_zlib;
+use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
@@ -23,7 +23,7 @@ const BINARY_MAGIC: &[u8; 8] = b"RPPBIN\x1A\0";
 const BINARY_VERSION: u16 = 1;
 const BINARY_HEADER_LEN: usize = 8 + 2 + 4 + 4;
 const MAX_PLAN_BYTES: usize = 64 * 1024 * 1024;
-const MAX_PROJECT_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_PROJECT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ASSETS: usize = 256;
 
@@ -315,6 +315,15 @@ pub fn encode_project(plan: &PlanFile, assets: &[ProjectAsset]) -> Result<Vec<u8
         return Err(FormatError::TooLarge);
     }
     let plan_data = encode_plan_data(plan, assets)?;
+    let expanded_size = assets
+        .iter()
+        .try_fold(plan_data.len(), |total, asset| {
+            total.checked_add(asset.bytes.len())
+        })
+        .ok_or(FormatError::TooLarge)?;
+    if expanded_size > MAX_PROJECT_BYTES {
+        return Err(FormatError::TooLarge);
+    }
     let cursor = Cursor::new(Vec::new());
     let mut archive = zip::ZipWriter::new(cursor);
     let options = zip::write::SimpleFileOptions::default()
@@ -385,6 +394,7 @@ pub fn decode_plan(bytes: &[u8]) -> Result<DecodedPlan, FormatError> {
     {
         let plan = serde_json::from_slice::<PlanFile>(bytes).map_err(|_| FormatError::Corrupted)?;
         validate_plan(&plan)?;
+        validate_assets(&plan, &[])?;
         return Ok(DecodedPlan {
             plan,
             assets: Vec::new(),
@@ -976,6 +986,19 @@ fn decode_container(bytes: &[u8]) -> Result<DecodedPlan, FormatError> {
         return Err(FormatError::TooLarge);
     }
 
+    let mut total_unpacked = 0_u64;
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|_| FormatError::Corrupted)?;
+        total_unpacked = total_unpacked
+            .checked_add(file.size())
+            .ok_or(FormatError::TooLarge)?;
+        if total_unpacked > MAX_PROJECT_BYTES as u64 {
+            return Err(FormatError::TooLarge);
+        }
+    }
+
     let plan_data = {
         let file = archive
             .by_name("plan.data")
@@ -999,7 +1022,11 @@ fn decode_container(bytes: &[u8]) -> Result<DecodedPlan, FormatError> {
     }
 
     let mut assets = Vec::with_capacity(descriptors.len());
+    let mut descriptor_ids = HashSet::new();
     for descriptor in descriptors {
+        if !descriptor_ids.insert(descriptor.id.clone()) {
+            return Err(FormatError::InvalidPlan);
+        }
         let path = format!("assets/{}.{}", descriptor.id, descriptor.extension);
         let file = archive
             .by_name(&path)
@@ -1057,8 +1084,8 @@ fn decode_legacy_binary(bytes: &[u8]) -> Result<PlanFile, FormatError> {
         return Err(FormatError::InvalidHeader);
     }
 
-    let serialized =
-        decompress_to_vec_zlib(&bytes[BINARY_HEADER_LEN..]).map_err(|_| FormatError::Corrupted)?;
+    let serialized = decompress_to_vec_zlib_with_limit(&bytes[BINARY_HEADER_LEN..], serialized_len)
+        .map_err(|_| FormatError::Corrupted)?;
     if serialized.len() != serialized_len {
         return Err(FormatError::Corrupted);
     }
@@ -1070,7 +1097,7 @@ fn decode_legacy_binary(bytes: &[u8]) -> Result<PlanFile, FormatError> {
     Ok(plan)
 }
 
-fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
+pub fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
     if plan.version != 1
         || plan.walls.len() > 100_000
         || plan.lines.len() > 100_000
@@ -1237,10 +1264,13 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
         if !valid_id(&area.id)
             || !object_ids.insert(area.id.as_str())
             || !(3..=10_000).contains(&area.points.len())
-            || area
-                .points
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || area.points.iter().any(|point| {
+                !point.x.is_finite()
+                    || !point.y.is_finite()
+                    || point.x.abs() > 1_000_000_000.0
+                    || point.y.abs() > 1_000_000_000.0
+            })
+            || !area.area_square_centimeters().is_finite()
             || area.area_square_centimeters() <= 0.0
         {
             return Err(FormatError::InvalidPlan);
@@ -1253,6 +1283,8 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
             || !compass.y.is_finite()
             || !compass.size.is_finite()
             || !compass.rotation.is_finite()
+            || compass.x.abs() > 1_000_000_000.0
+            || compass.y.abs() > 1_000_000_000.0
             || !(1.0..=100_000.0).contains(&compass.size)
         {
             return Err(FormatError::InvalidPlan);
@@ -1265,6 +1297,8 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
             || !arrow.y.is_finite()
             || !arrow.length.is_finite()
             || !arrow.width.is_finite()
+            || arrow.x.abs() > 1_000_000_000.0
+            || arrow.y.abs() > 1_000_000_000.0
             || !(1.0..=1_000_000.0).contains(&arrow.length)
             || !(0.1..=1_000_000.0).contains(&arrow.width)
             || arrow.orientation >= PlanArrow::ORIENTATION_COUNT
@@ -1277,10 +1311,13 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
             || !object_ids.insert(room.id.as_str())
             || room.name.len() > 512
             || !(3..=10_000).contains(&room.points.len())
-            || room
-                .points
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || room.points.iter().any(|point| {
+                !point.x.is_finite()
+                    || !point.y.is_finite()
+                    || point.x.abs() > 1_000_000_000.0
+                    || point.y.abs() > 1_000_000_000.0
+            })
+            || !room.area_square_centimeters().is_finite()
             || room.area_square_centimeters() <= 0.0
             || !room.perimeter_centimeters().is_finite()
         {
@@ -1300,6 +1337,9 @@ fn validate_plan(plan: &PlanFile) -> Result<(), FormatError> {
             return Err(FormatError::InvalidPlan);
         }
     }
+    if !layer_ids.contains(crate::model::DEFAULT_LAYER_ID) {
+        return Err(FormatError::InvalidPlan);
+    }
     let mut assigned_items = HashSet::with_capacity(plan.layer_assignments.len());
     for assignment in &plan.layer_assignments {
         if !object_ids.contains(assignment.item_id.as_str())
@@ -1317,7 +1357,16 @@ fn validate_assets(plan: &PlanFile, assets: &[ProjectAsset]) -> Result<(), Forma
         return Err(FormatError::TooLarge);
     }
     let mut asset_ids = HashSet::with_capacity(assets.len());
+    let mut decoded_bytes = 0_u64;
     for asset in assets {
+        decoded_bytes = decoded_bytes
+            .checked_add(
+                crate::images::decoded_byte_len(&asset.bytes).ok_or(FormatError::InvalidPlan)?,
+            )
+            .ok_or(FormatError::TooLarge)?;
+        if decoded_bytes > crate::images::MAX_DECODED_BYTES {
+            return Err(FormatError::TooLarge);
+        }
         if !valid_id(&asset.id)
             || !valid_id(&asset.name)
             || !valid_extension(&asset.extension)
@@ -1570,17 +1619,7 @@ fn valid_extension(value: &str) -> bool {
 }
 
 fn valid_image_bytes(bytes: &[u8]) -> bool {
-    let Ok(mut reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() else {
-        return false;
-    };
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(256 * 1024 * 1024);
-    reader.limits(limits);
-    reader
-        .into_dimensions()
-        .is_ok_and(|(width, height)| width > 0 && height > 0)
+    crate::images::valid_dimensions(bytes)
 }
 
 fn syntax<T>(line: usize, message: impl Into<String>) -> Result<T, FormatError> {
@@ -2118,5 +2157,75 @@ OBJECT_NAME object-1 \"Desk #1\"
         let decoded = decode_plan(&encoded).expect("project decoding");
 
         assert_eq!(decoded.plan, plan);
+    }
+
+    #[test]
+    fn zip_expansion_budget_is_checked_before_reading_payloads() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "plan.data",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .expect("entry");
+        writer
+            .write_all(b"RPP-PLAN 2\nUNITS cm\n")
+            .expect("content");
+        let mut bytes = writer.finish().expect("zip").into_inner();
+        let central = bytes
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .expect("central header");
+        bytes[central + 24..central + 28]
+            .copy_from_slice(&((MAX_PROJECT_BYTES as u32) + 1).to_le_bytes());
+        assert!(matches!(decode_plan(&bytes), Err(FormatError::TooLarge)));
+    }
+
+    #[test]
+    fn legacy_payload_cannot_expand_past_its_declared_size() {
+        let payload = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0_u8; 100_000], 9);
+        let mut bytes = BINARY_MAGIC.to_vec();
+        bytes.extend(BINARY_VERSION.to_le_bytes());
+        bytes.extend(1_u32.to_le_bytes());
+        bytes.extend((payload.len() as u32).to_le_bytes());
+        bytes.extend(payload);
+        assert!(decode_plan(&bytes).is_err());
+    }
+
+    #[test]
+    fn legacy_json_with_missing_assets_or_default_layer_is_rejected() {
+        let mut plan = PlanFile::default();
+        plan.images.push(ImageObject {
+            id: "image".into(),
+            asset_id: "missing".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+            rotation: 0.0,
+            locked: false,
+        });
+        assert!(decode_plan(&serde_json::to_vec(&plan).expect("JSON")).is_err());
+        plan.images.clear();
+        plan.layers[0].id = "custom-only".into();
+        assert!(decode_plan(&serde_json::to_vec(&plan).expect("JSON")).is_err());
+    }
+
+    #[test]
+    fn non_finite_or_out_of_bounds_polygon_geometry_is_rejected() {
+        let mut plan = PlanFile::default();
+        plan.areas.push(AreaShape {
+            id: "area".into(),
+            points: vec![
+                Point::new(0.0, 0.0),
+                Point::new(f32::MAX, 0.0),
+                Point::new(0.0, f32::MAX),
+            ],
+            fill_color: [0, 0, 0],
+            stroke_color: [0, 0, 0],
+            locked: false,
+        });
+        assert!(validate_plan(&plan).is_err());
     }
 }

@@ -74,8 +74,14 @@ pub fn canvas_navigation(input: &InputState, mode: ScrollMode) -> CanvasNavigati
                             1.0
                         };
                 }
-                (_, MouseWheelUnit::Point) => steps += delta.y / 50.0,
-                _ => steps += delta.y,
+                (_, MouseWheelUnit::Point) => {
+                    pan.x += delta.x;
+                    steps += delta.y / 50.0;
+                }
+                _ => {
+                    pan.x += delta.x * 24.0;
+                    steps += delta.y;
+                }
             }
         }
     }

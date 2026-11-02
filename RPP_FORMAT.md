@@ -834,6 +834,8 @@ RPP 0.8.0 applies these limits:
 | Resource | Limit |
 |---|---:|
 | Complete input project | 256 MiB |
+| Total expanded ZIP content | 256 MiB |
+| Total decoded pixels of all embedded assets (RGBA) | 256 MiB |
 | `plan.data` | 64 MiB |
 | Individual asset | 32 MiB |
 | Embedded assets | 256 |
@@ -957,3 +959,17 @@ plans miserable to maintain. Future changes therefore follow these rules:
 - keep the writer deterministic and readable;
 - validate references and complexity before replacing a user's file;
 - add parser, writer, validation, migration, and round-trip tests.
+
+
+### Reader hardening in 0.9.1
+
+Readers bound disk reads before decoding, cap cumulative ZIP expansion, limit
+legacy zlib expansion to the declared uncompressed size, and reject duplicate
+asset descriptors. Images must fit both the per-image dimensions/allocation
+limits and the cumulative decoded-image budget. A valid plan must contain the
+`default` layer. Non-finite or out-of-bounds polygon coordinates are rejected.
+
+Automatic room detection has a separate computational budget: 4,096 input walls,
+200,000 candidate intersection pairs and 10,000 split segments. If a plan exceeds
+that budget, existing room metadata is retained and the editor displays a warning;
+the document can still be opened and edited.

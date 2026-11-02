@@ -37,8 +37,8 @@ jobs:
       run:
         working-directory: native
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install Linux development libraries and fonts
@@ -70,15 +70,26 @@ jobs:
             dist/*.tar.gz
           if-no-files-found: error
 
+  security:
+    name: Check dependency advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependency auditor
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Reject dependency advisories and withdrawn versions
+        working-directory: native
+        run: cargo audit --deny warnings
+
   publish:
     name: Publish new version after all platforms pass
-    needs: build
+    needs: [build, security]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
         with:
           pattern: rpp-*
@@ -96,15 +107,24 @@ jobs:
           import subprocess
           import tomllib
 
+          current_head = subprocess.check_output([
+              "gh", "api", f"repos/{os.environ['GH_REPO']}/commits/main", "--jq", ".sha",
+          ], text=True).strip()
+          if current_head != os.environ["GITHUB_SHA"]:
+              print("This commit was superseded; leaving publication to the current main build.")
+              raise SystemExit(0)
           version = tomllib.loads(Path("native/Cargo.toml").read_text())["package"]["version"]
           tag = f"v{version}"
           releases = subprocess.check_output([
               "gh", "api", "--paginate", f"repos/{os.environ['GH_REPO']}/releases",
-              "--jq", ".[].tag_name",
+              "--jq", ".[] | [.tag_name, .draft, .target_commitish] | @tsv",
           ], text=True).splitlines()
-          if tag in releases:
+          existing = next((line.split("\t") for line in releases if line.split("\t")[0] == tag), None)
+          if existing and existing[1] == "false":
               print(f"{tag} is already published; leaving its assets unchanged.")
               raise SystemExit(0)
+          if existing and existing[2] != os.environ["GITHUB_SHA"]:
+              raise SystemExit("A draft release exists for a different commit; inspect it before retrying")
           assets = sorted(path for path in Path("dist").iterdir() if path.is_file())
           expected = {
               f"RPP-{version}-windows-x64.exe", f"RPP-{version}-linux-x64.tar.gz",
@@ -116,9 +136,13 @@ jobs:
           checksums.write_text("".join(
               f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in assets
           ))
+          if not existing:
+              subprocess.run([
+                  "gh", "release", "create", tag, "--target", os.environ["GITHUB_SHA"],
+                  "--title", f"RPP {version}", "--notes-file", "RELEASE_NOTES.md", "--draft",
+              ], check=True)
           subprocess.run([
-              "gh", "release", "create", tag, "--target", os.environ["GITHUB_SHA"],
-              "--title", f"RPP {version}", "--notes-file", "RELEASE_NOTES.md",
-              *map(str, assets), str(checksums),
+              "gh", "release", "upload", tag, *map(str, assets), str(checksums), "--clobber",
           ], check=True)
+          subprocess.run(["gh", "release", "edit", tag, "--draft=false", "--latest"], check=True)
           PY

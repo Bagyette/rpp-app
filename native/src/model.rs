@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -300,11 +301,6 @@ impl PlanFile {
             .is_none_or(|layer| layer.visible && !layer.locked)
     }
 
-    pub fn item_opacity(&self, item_id: &str) -> f32 {
-        self.layer_for(item_id)
-            .map_or(1.0, |layer| layer.opacity.clamp(0.0, 1.0))
-    }
-
     pub fn assign_to_layer(&mut self, item_id: &str, layer_id: &str) {
         self.layer_assignments
             .retain(|assignment| assignment.item_id != item_id);
@@ -316,9 +312,71 @@ impl PlanFile {
         }
     }
 
+    pub fn prune_layer_assignments(&mut self) {
+        let ids: HashSet<&str> = self
+            .walls
+            .iter()
+            .map(|item| item.id.as_str())
+            .chain(self.lines.iter().map(|item| item.id.as_str()))
+            .chain(self.doors.iter().map(|item| item.id.as_str()))
+            .chain(self.windows.iter().map(|item| item.id.as_str()))
+            .chain(self.objects.iter().map(|item| item.id.as_str()))
+            .chain(self.images.iter().map(|item| item.id.as_str()))
+            .chain(self.texts.iter().map(|item| item.id.as_str()))
+            .chain(self.areas.iter().map(|item| item.id.as_str()))
+            .chain(self.rooms.iter().map(|item| item.id.as_str()))
+            .chain(self.compasses.iter().map(|item| item.id.as_str()))
+            .chain(self.arrows.iter().map(|item| item.id.as_str()))
+            .collect();
+        self.layer_assignments
+            .retain(|assignment| ids.contains(assignment.item_id.as_str()));
+    }
+
     pub fn remove_layer_assignment(&mut self, item_id: &str) {
         self.layer_assignments
             .retain(|assignment| assignment.item_id != item_id);
+    }
+}
+
+/// Per-render/export index; avoids repeated linear scans of all layer assignments.
+pub struct LayerLookup<'a> {
+    assignments: HashMap<&'a str, &'a str>,
+    layers: HashMap<&'a str, &'a Layer>,
+}
+
+impl<'a> LayerLookup<'a> {
+    pub fn new(plan: &'a PlanFile) -> Self {
+        Self {
+            assignments: plan
+                .layer_assignments
+                .iter()
+                .map(|assignment| (assignment.item_id.as_str(), assignment.layer_id.as_str()))
+                .collect(),
+            layers: plan
+                .layers
+                .iter()
+                .map(|layer| (layer.id.as_str(), layer))
+                .collect(),
+        }
+    }
+
+    pub fn layer_id_for(&self, item_id: &str) -> &str {
+        self.assignments
+            .get(item_id)
+            .copied()
+            .unwrap_or(DEFAULT_LAYER_ID)
+    }
+
+    pub fn item_visible(&self, item_id: &str) -> bool {
+        self.layers
+            .get(self.layer_id_for(item_id))
+            .is_none_or(|layer| layer.visible)
+    }
+
+    pub fn item_opacity(&self, item_id: &str) -> f32 {
+        self.layers
+            .get(self.layer_id_for(item_id))
+            .map_or(1.0, |layer| layer.opacity.clamp(0.0, 1.0))
     }
 }
 
@@ -453,18 +511,35 @@ pub fn default_room_fill_color() -> [u8; 3] {
     [220, 230, 239]
 }
 
-fn polygon_area(points: &[Point]) -> f32 {
-    if points.len() < 3 {
+pub fn polygon_area(points: &[Point]) -> f32 {
+    let Some(origin) = points.first() else {
         return 0.0;
-    }
+    };
     points
         .iter()
         .zip(points.iter().cycle().skip(1))
         .take(points.len())
-        .map(|(a, b)| a.x * b.y - b.x * a.y)
-        .sum::<f32>()
-        .abs()
+        .map(|(a, b)| {
+            let ax = f64::from(a.x) - f64::from(origin.x);
+            let ay = f64::from(a.y) - f64::from(origin.y);
+            let bx = f64::from(b.x) - f64::from(origin.x);
+            let by = f64::from(b.y) - f64::from(origin.y);
+            ax * by - bx * ay
+        })
+        .sum::<f64>()
+        .abs() as f32
         * 0.5
+}
+
+pub fn truncate_text(value: &mut String, maximum_bytes: usize) {
+    if value.len() <= maximum_bytes {
+        return;
+    }
+    let mut boundary = maximum_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -729,5 +804,28 @@ impl Snapshot {
         plan.layers = self.layers;
         plan.layer_assignments = self.layer_assignments;
         *assets = self.assets;
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::{Point, polygon_area, truncate_text};
+
+    #[test]
+    fn polygon_area_does_not_cancel_at_large_offsets() {
+        let points = [
+            Point::new(10_000_000.0, 10_000_000.0),
+            Point::new(10_001_000.0, 10_000_000.0),
+            Point::new(10_001_000.0, 10_001_000.0),
+            Point::new(10_000_000.0, 10_001_000.0),
+        ];
+        assert_eq!(polygon_area(&points), 1_000_000.0);
+    }
+
+    #[test]
+    fn text_limits_preserve_utf8_boundaries() {
+        let mut text = "é😄é".to_owned();
+        truncate_text(&mut text, 5);
+        assert_eq!(text, "é");
     }
 }

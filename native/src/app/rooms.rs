@@ -22,9 +22,15 @@ impl RppApp {
             .filter(|room| room.source == RoomSource::Manual)
             .cloned()
             .collect::<Vec<_>>();
+        let Ok(polygons) = detect_room_polygons(&self.plan.walls) else {
+            self.room_detection_limited = true;
+            return;
+        };
+        self.room_detection_limited = false;
         let mut automatic = Vec::new();
+        let mut transferred_layers = Vec::new();
 
-        for points in detect_room_polygons(&self.plan.walls) {
+        for points in polygons {
             let id = stable_room_id(&points);
             let center = polygon_center(&points);
             let metadata = previous.iter().find(|room| room.id == id).or_else(|| {
@@ -40,6 +46,10 @@ impl RppApp {
                             .total_cmp(&polygon_center(&b.points).distance(center))
                     })
             });
+            if let Some(metadata) = metadata {
+                transferred_layers
+                    .push((id.clone(), self.plan.layer_id_for(&metadata.id).to_owned()));
+            }
             automatic.push(Room {
                 id,
                 name: metadata.map_or_else(String::new, |room| room.name.clone()),
@@ -63,6 +73,9 @@ impl RppApp {
         });
         self.plan.rooms = manual;
         self.plan.rooms.extend(automatic);
+        for (id, layer_id) in transferred_layers {
+            self.plan.assign_to_layer(&id, &layer_id);
+        }
     }
 
     pub(super) fn handle_room_events(

@@ -5,12 +5,31 @@ import argparse
 import hashlib
 from pathlib import Path
 import plistlib
+import struct
 import shutil
 import subprocess
 import tarfile
 import json
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_binary(binary: Path, platform: str, architecture: str) -> None:
+    with binary.open("rb") as source:
+        header = source.read(64)
+        actual = None
+        if platform == "macos" and header[:4] == b"\xcf\xfa\xed\xfe" and len(header) >= 8:
+            actual = {0x01000007: "x64", 0x0100000C: "arm64"}.get(struct.unpack_from("<I", header, 4)[0])
+        elif platform == "linux" and header[:5] == b"\x7fELF\x02" and len(header) >= 20:
+            endian = "<" if header[5] == 1 else ">"
+            actual = {62: "x64", 183: "arm64"}.get(struct.unpack_from(endian + "H", header, 18)[0])
+        elif platform == "windows" and header[:2] == b"MZ" and len(header) == 64:
+            source.seek(struct.unpack_from("<I", header, 60)[0])
+            pe = source.read(6)
+            if pe[:4] == b"PE\0\0" and len(pe) == 6:
+                actual = {0x8664: "x64", 0xAA64: "arm64"}.get(struct.unpack_from("<H", pe, 4)[0])
+    if actual != architecture:
+        raise ValueError(f"Binary does not match {platform}/{architecture}: {binary}")
 
 
 def package(platform: str, architecture: str, output: Path) -> Path:
@@ -21,6 +40,8 @@ def package(platform: str, architecture: str, output: Path) -> Path:
     version = metadata["packages"][0]["version"]
     output.mkdir(parents=True, exist_ok=True)
     target = ROOT / "native/target/release"
+    binary = target / ("rpp.exe" if platform == "windows" else "rpp")
+    verify_binary(binary, platform, architecture)
     if platform == "windows":
         artifact = output / f"RPP-{version}-windows-{architecture}.exe"
         shutil.copy2(target / "rpp.exe", artifact)

@@ -4,6 +4,8 @@ languages:
     name: English (US)
     strings:
       app.ready: Ready
+      status.room_detection_limit: Automatic room detection paused for this complex plan; existing rooms are kept.
+      status.autosave_error: "Recovery save failed: {error}"
       navigation.scroll: Scrolling
       navigation.auto: Automatic (trackpad / wheel)
       navigation.pan: Always pan
@@ -303,6 +305,8 @@ languages:
     name: Français
     strings:
       app.ready: Prêt
+      status.room_detection_limit: Détection automatique suspendue pour ce plan complexe ; les pièces existantes sont conservées.
+      status.autosave_error: "Échec de la sauvegarde de récupération : {error}"
       navigation.scroll: Défilement
       navigation.auto: Automatique (trackpad / molette)
       navigation.pan: Toujours déplacer
@@ -602,6 +606,8 @@ languages:
     name: Español
     strings:
       app.ready: Listo
+      status.room_detection_limit: Detección automática pausada para este plano complejo; se conservan las habitaciones existentes.
+      status.autosave_error: "Error al guardar la recuperación: {error}"
       navigation.scroll: Desplazamiento
       navigation.auto: Automático (panel táctil / rueda)
       navigation.pan: Siempre desplazar

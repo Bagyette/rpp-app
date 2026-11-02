@@ -12,48 +12,45 @@ impl RppApp {
         painter.rect_filled(rect, 0.0, self.canvas_fill());
         self.paint_grid(painter, rect);
 
+        let lookup = crate::model::LayerLookup::new(&self.plan);
         for layer in &self.plan.layers {
             if !layer.visible {
                 continue;
             }
             let layer_id = layer.id.as_str();
+            let mut layer_painter = painter.clone();
+            layer_painter.multiply_opacity(layer.opacity);
+            let painter = &layer_painter;
             for room in &self.plan.rooms {
-                if self.plan.layer_id_for(&room.id) != layer_id || !self.plan.item_visible(&room.id)
-                {
+                if lookup.layer_id_for(&room.id) != layer_id || !lookup.item_visible(&room.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Room(room.id.clone()));
                 self.paint_room(painter, rect, room, selected);
             }
             for area in &self.plan.areas {
-                if self.plan.layer_id_for(&area.id) != layer_id || !self.plan.item_visible(&area.id)
-                {
+                if lookup.layer_id_for(&area.id) != layer_id || !lookup.item_visible(&area.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Area(area.id.clone()));
                 self.paint_area(painter, rect, area, selected);
             }
             for image in &self.plan.images {
-                if self.plan.layer_id_for(&image.id) != layer_id
-                    || !self.plan.item_visible(&image.id)
-                {
+                if lookup.layer_id_for(&image.id) != layer_id || !lookup.item_visible(&image.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Image(image.id.clone()));
                 self.paint_image(painter, rect, image, selected);
             }
             for object in &self.plan.objects {
-                if self.plan.layer_id_for(&object.id) != layer_id
-                    || !self.plan.item_visible(&object.id)
-                {
+                if lookup.layer_id_for(&object.id) != layer_id || !lookup.item_visible(&object.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Object(object.id.clone()));
                 self.paint_object(painter, rect, object, selected);
             }
             for line in &self.plan.lines {
-                if self.plan.layer_id_for(&line.id) != layer_id || !self.plan.item_visible(&line.id)
-                {
+                if lookup.layer_id_for(&line.id) != layer_id || !lookup.item_visible(&line.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Line(line.id.clone()));
@@ -61,7 +58,6 @@ impl RppApp {
                     ACCENT
                 } else {
                     Color32::from_rgb(line.color[0], line.color[1], line.color[2])
-                        .gamma_multiply(self.plan.item_opacity(&line.id))
                 };
                 painter.line_segment(
                     [
@@ -72,31 +68,27 @@ impl RppApp {
                 );
             }
             for wall in &self.plan.walls {
-                if self.plan.layer_id_for(&wall.id) != layer_id || !self.plan.item_visible(&wall.id)
-                {
+                if lookup.layer_id_for(&wall.id) != layer_id || !lookup.item_visible(&wall.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Wall(wall.id.clone()));
                 self.paint_wall(painter, rect, wall, selected);
             }
             for door in &self.plan.doors {
-                if self.plan.layer_id_for(&door.id) != layer_id || !self.plan.item_visible(&door.id)
-                {
+                if lookup.layer_id_for(&door.id) != layer_id || !lookup.item_visible(&door.id) {
                     continue;
                 }
                 let Some(wall) = self.plan.walls.iter().find(|wall| wall.id == door.wall_id) else {
                     continue;
                 };
-                if !self.plan.item_visible(&wall.id) {
+                if !lookup.item_visible(&wall.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Door(door.id.clone()));
                 self.paint_door(painter, rect, door, wall, selected);
             }
             for window in &self.plan.windows {
-                if self.plan.layer_id_for(&window.id) != layer_id
-                    || !self.plan.item_visible(&window.id)
-                {
+                if lookup.layer_id_for(&window.id) != layer_id || !lookup.item_visible(&window.id) {
                     continue;
                 }
                 let Some(wall) = self
@@ -107,23 +99,21 @@ impl RppApp {
                 else {
                     continue;
                 };
-                if !self.plan.item_visible(&wall.id) {
+                if !lookup.item_visible(&wall.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Window(window.id.clone()));
                 self.paint_window(painter, rect, window, wall, selected);
             }
             for text in &self.plan.texts {
-                if self.plan.layer_id_for(&text.id) != layer_id || !self.plan.item_visible(&text.id)
-                {
+                if lookup.layer_id_for(&text.id) != layer_id || !lookup.item_visible(&text.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Text(text.id.clone()));
                 self.paint_text(painter, rect, text, selected);
             }
             for compass in &self.plan.compasses {
-                if self.plan.layer_id_for(&compass.id) != layer_id
-                    || !self.plan.item_visible(&compass.id)
+                if lookup.layer_id_for(&compass.id) != layer_id || !lookup.item_visible(&compass.id)
                 {
                     continue;
                 }
@@ -131,9 +121,7 @@ impl RppApp {
                 self.paint_compass(painter, rect, compass, selected);
             }
             for arrow in &self.plan.arrows {
-                if self.plan.layer_id_for(&arrow.id) != layer_id
-                    || !self.plan.item_visible(&arrow.id)
-                {
+                if lookup.layer_id_for(&arrow.id) != layer_id || !lookup.item_visible(&arrow.id) {
                     continue;
                 }
                 let selected = self.is_selected(&Selection::Arrow(arrow.id.clone()));
@@ -253,7 +241,6 @@ impl RppApp {
     }
 
     fn paint_image(&self, painter: &Painter, rect: Rect, image: &ImageObject, selected: bool) {
-        let opacity = self.plan.item_opacity(&image.id);
         let angle = image.rotation.to_radians();
         let cosine = angle.cos();
         let sine = angle.sin();
@@ -300,7 +287,7 @@ impl RppApp {
             mesh.vertices.push(egui::epaint::Vertex {
                 pos: positions[index],
                 uv: uvs[index],
-                color: Color32::from_white_alpha((255.0 * opacity) as u8),
+                color: Color32::from_white_alpha(255),
             });
         }
         mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
@@ -311,7 +298,6 @@ impl RppApp {
     }
 
     fn paint_area(&self, painter: &Painter, rect: Rect, area: &AreaShape, selected: bool) {
-        let opacity = self.plan.item_opacity(&area.id);
         let normalized = normalized_polygon_points(&area.points);
         let points: Vec<Pos2> = normalized
             .iter()
@@ -324,7 +310,7 @@ impl RppApp {
             area.fill_color[0],
             area.fill_color[1],
             area.fill_color[2],
-            (120.0 * opacity) as u8,
+            120,
         );
         let stroke = if selected {
             ACCENT
@@ -334,7 +320,6 @@ impl RppApp {
                 area.stroke_color[1],
                 area.stroke_color[2],
             )
-            .gamma_multiply(opacity)
         };
         let mut mesh = Mesh::default();
         for triangle in triangulate_polygon(&points) {
@@ -373,12 +358,7 @@ impl RppApp {
         if points.len() < 3 {
             return;
         }
-        let opacity = self.plan.item_opacity(&room.id);
-        let fill_alpha = if room.fill_visible {
-            (78.0 * opacity).round() as u8
-        } else {
-            0
-        };
+        let fill_alpha = if room.fill_visible { 78 } else { 0 };
         let fill = Color32::from_rgba_unmultiplied(
             room.fill_color[0],
             room.fill_color[1],
@@ -405,7 +385,7 @@ impl RppApp {
         let outline = if selected {
             ACCENT
         } else {
-            Color32::from_rgba_unmultiplied(60, 105, 140, (150.0 * opacity) as u8)
+            Color32::from_rgba_unmultiplied(60, 105, 140, 150)
         };
         painter.add(Shape::closed_line(
             points,
@@ -440,7 +420,6 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(compass.color[0], compass.color[1], compass.color[2])
-                .gamma_multiply(self.plan.item_opacity(&compass.id))
         };
         painter.circle_stroke(center, radius, Stroke::new(1.3, color));
         painter.line_segment([south, north], Stroke::new(2.0, color));
@@ -486,7 +465,6 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(arrow.color[0], arrow.color[1], arrow.color[2])
-                .gamma_multiply(self.plan.item_opacity(&arrow.id))
         };
         let thin = (arrow.width * 0.08 * self.zoom).max(1.2);
         let bold = (arrow.width * 0.18 * self.zoom).max(2.0);
@@ -594,7 +572,6 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(text.color[0], text.color[1], text.color[2])
-                .gamma_multiply(self.plan.item_opacity(&text.id))
         };
         let galley = painter.layout(
             text.text.clone(),
@@ -624,7 +601,6 @@ impl RppApp {
     }
 
     fn paint_object(&self, painter: &Painter, rect: Rect, object: &PlanObject, selected: bool) {
-        let opacity = self.plan.item_opacity(&object.id);
         let positions = rotated_rectangle(
             object.x,
             object.y,
@@ -643,7 +619,6 @@ impl RppApp {
                     object.stroke_color[1],
                     object.stroke_color[2],
                 )
-                .gamma_multiply(opacity)
             },
         );
         painter.add(Shape::convex_polygon(
@@ -652,7 +627,7 @@ impl RppApp {
                 object.fill_color[0],
                 object.fill_color[1],
                 object.fill_color[2],
-                (210.0 * opacity) as u8,
+                210,
             ),
             stroke,
         ));
@@ -674,8 +649,7 @@ impl RppApp {
                 object.stroke_color[0],
                 object.stroke_color[1],
                 object.stroke_color[2],
-            )
-            .gamma_multiply(opacity),
+            ),
         );
         if selected && self.tool == Tool::Select {
             for handle in object_resize_handles(object) {
@@ -724,17 +698,12 @@ impl RppApp {
                 self.world_to_screen(rect, start),
                 self.world_to_screen(rect, end),
             ],
-            Stroke::new(
-                (wall.thickness + 4.0) * self.zoom,
-                self.canvas_fill()
-                    .gamma_multiply(self.plan.item_opacity(&window.id)),
-            ),
+            Stroke::new((wall.thickness + 4.0) * self.zoom, self.canvas_fill()),
         );
         let color = if selected {
             ACCENT
         } else {
             Color32::from_rgb(window.color[0], window.color[1], window.color[2])
-                .gamma_multiply(self.plan.item_opacity(&window.id))
         };
         let offsets: &[f32] = if window.kind == WindowKind::Bay {
             &[-0.35, 0.0, 0.35]
@@ -796,7 +765,6 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(wall.color[0], wall.color[1], wall.color[2])
-                .gamma_multiply(self.plan.item_opacity(&wall.id))
         };
         painter.line_segment([start, end], Stroke::new(wall.thickness * self.zoom, color));
 
@@ -847,7 +815,6 @@ impl RppApp {
             ACCENT
         } else {
             Color32::from_rgb(door.color[0], door.color[1], door.color[2])
-                .gamma_multiply(self.plan.item_opacity(&door.id))
         };
 
         painter.line_segment(
@@ -855,11 +822,7 @@ impl RppApp {
                 self.world_to_screen(rect, left),
                 self.world_to_screen(rect, right),
             ],
-            Stroke::new(
-                (wall.thickness + 4.0) * self.zoom,
-                self.canvas_fill()
-                    .gamma_multiply(self.plan.item_opacity(&door.id)),
-            ),
+            Stroke::new((wall.thickness + 4.0) * self.zoom, self.canvas_fill()),
         );
 
         if door.kind == DoorKind::Sliding {

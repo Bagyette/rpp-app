@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Cursor;
 use std::path::Path;
@@ -65,7 +66,7 @@ pub fn export_svg(
     include_distances: bool,
 ) -> Result<(), String> {
     let scene = build_scene(plan, assets, localizer, include_distances)?;
-    std::fs::write(path, scene.svg).map_err(|error| error.to_string())
+    crate::storage::write_atomic(path, scene.svg.as_bytes()).map_err(|error| error.to_string())
 }
 
 pub fn export_png(
@@ -84,7 +85,8 @@ pub fn export_png(
     let mut pixmap =
         Pixmap::new(scene.width, scene.height).ok_or_else(|| "Invalid export size".to_owned())?;
     resvg::render(&tree, Transform::identity(), &mut pixmap.as_mut());
-    pixmap.save_png(path).map_err(|error| error.to_string())
+    let png = pixmap.encode_png().map_err(|error| error.to_string())?;
+    crate::storage::write_atomic(path, &png).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -157,7 +159,7 @@ pub fn export_pdf(
         image_width_points,
         image_height_points,
     );
-    std::fs::write(path, pdf).map_err(|error| error.to_string())
+    crate::storage::write_atomic(path, &pdf).map_err(|error| error.to_string())
 }
 
 fn render_scene(scene: &ExportScene) -> Result<Pixmap, String> {
@@ -202,17 +204,28 @@ fn build_scene(
     )
     .expect("formatting into a String cannot fail");
 
-    for room in &plan.rooms {
-        if !plan.item_visible(&room.id) {
+    let lookup = crate::model::LayerLookup::new(plan);
+    let walls_by_id: HashMap<&str, &Wall> = plan
+        .walls
+        .iter()
+        .map(|wall| (wall.id.as_str(), wall))
+        .collect();
+    for layer in &plan.layers {
+        if !layer.visible {
             continue;
         }
-        write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
-        for point in &room.points {
-            write!(svg, "{:.3},{:.3} ", point.x, point.y)
-                .expect("formatting into a String cannot fail");
-        }
-        let opacity = plan.item_opacity(&room.id);
-        writeln!(
+        let layer_id = layer.id.as_str();
+        for room in &plan.rooms {
+            if !(lookup.item_visible(&room.id) && lookup.layer_id_for(&room.id) == layer_id) {
+                continue;
+            }
+            write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
+            for point in &room.points {
+                write!(svg, "{:.3},{:.3} ", point.x, point.y)
+                    .expect("formatting into a String cannot fail");
+            }
+            let opacity = lookup.item_opacity(&room.id);
+            writeln!(
             svg,
             r##"" fill="{}" fill-opacity="{:.3}" stroke="#3c698c" stroke-opacity="{:.3}" stroke-width="1"/>"##,
             svg_color(room.fill_color),
@@ -220,13 +233,13 @@ fn build_scene(
             0.7 * opacity,
         )
         .expect("formatting into a String cannot fail");
-        let center = crate::room_detection::polygon_center(&room.points);
-        let title = if room.name.trim().is_empty() {
-            localizer.text("room.default_name")
-        } else {
-            room.name.trim().to_owned()
-        };
-        writeln!(
+            let center = crate::room_detection::polygon_center(&room.points);
+            let title = if room.name.trim().is_empty() {
+                localizer.text("room.default_name")
+            } else {
+                room.name.trim().to_owned()
+            };
+            writeln!(
             svg,
             r##"<text x="{:.3}" y="{:.3}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#3c698c"><tspan x="{:.3}" dy="0">{}</tspan><tspan x="{:.3}" dy="14">{:.2} m²</tspan></text>"##,
             center.x,
@@ -237,28 +250,28 @@ fn build_scene(
             room.area_square_centimeters() / 10_000.0,
         )
         .expect("formatting into a String cannot fail");
-    }
+        }
 
-    for area in &plan.areas {
-        if !plan.item_visible(&area.id) {
-            continue;
-        }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&area.id))
-            .expect("formatting into a String cannot fail");
-        write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
-        for point in &area.points {
-            write!(svg, "{:.3},{:.3} ", point.x, point.y)
+        for area in &plan.areas {
+            if !(lookup.item_visible(&area.id) && lookup.layer_id_for(&area.id) == layer_id) {
+                continue;
+            }
+            writeln!(svg, r#"<g opacity="{:.3}">"#, lookup.item_opacity(&area.id))
                 .expect("formatting into a String cannot fail");
-        }
-        writeln!(
-            svg,
-            r#"" fill="{}" fill-opacity="0.47" stroke="{}" stroke-width="1.3"/>"#,
-            svg_color(area.fill_color),
-            svg_color(area.stroke_color)
-        )
-        .expect("formatting into a String cannot fail");
-        let center = area_center(area);
-        writeln!(
+            write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
+            for point in &area.points {
+                write!(svg, "{:.3},{:.3} ", point.x, point.y)
+                    .expect("formatting into a String cannot fail");
+            }
+            writeln!(
+                svg,
+                r#"" fill="{}" fill-opacity="0.47" stroke="{}" stroke-width="1.3"/>"#,
+                svg_color(area.fill_color),
+                svg_color(area.stroke_color)
+            )
+            .expect("formatting into a String cannot fail");
+            let center = area_center(area);
+            writeln!(
             svg,
             r##"<text x="{:.3}" y="{:.3}" text-anchor="middle" dominant-baseline="central" font-family="Arial, sans-serif" font-size="12" fill="#465f46">{:.2} m²</text>"##,
             center.x,
@@ -266,34 +279,38 @@ fn build_scene(
             area.area_square_centimeters() / 10_000.0
         )
         .expect("formatting into a String cannot fail");
-        svg.push_str("</g>\n");
-    }
+            svg.push_str("</g>\n");
+        }
 
-    for image in &plan.images {
-        if !plan.item_visible(&image.id) {
-            continue;
-        }
-        let bytes: &[u8] = if image.asset_id == "builtin-emergency-exit" {
-            include_bytes!("../assets/library/emergency-exit.png")
-        } else if let Some(asset) = assets.iter().find(|asset| asset.id == image.asset_id) {
-            &asset.bytes
-        } else {
-            continue;
-        };
-        let Ok(decoded) = image::load_from_memory(bytes) else {
-            continue;
-        };
-        let mut png = Vec::new();
-        if decoded
-            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
-            .is_err()
-        {
-            continue;
-        }
-        let encoded = STANDARD.encode(png);
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&image.id))
+        for image in &plan.images {
+            if !(lookup.item_visible(&image.id) && lookup.layer_id_for(&image.id) == layer_id) {
+                continue;
+            }
+            let bytes: &[u8] = if image.asset_id == "builtin-emergency-exit" {
+                include_bytes!("../assets/library/emergency-exit.png")
+            } else if let Some(asset) = assets.iter().find(|asset| asset.id == image.asset_id) {
+                &asset.bytes
+            } else {
+                continue;
+            };
+            let Ok(decoded) = image::load_from_memory(bytes) else {
+                continue;
+            };
+            let mut png = Vec::new();
+            if decoded
+                .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+                .is_err()
+            {
+                continue;
+            }
+            let encoded = STANDARD.encode(png);
+            writeln!(
+                svg,
+                r#"<g opacity="{:.3}">"#,
+                lookup.item_opacity(&image.id)
+            )
             .expect("formatting into a String cannot fail");
-        writeln!(
+            writeln!(
             svg,
             r#"<image x="{:.3}" y="{:.3}" width="{:.3}" height="{:.3}" preserveAspectRatio="none" transform="rotate({:.3} {:.3} {:.3})" href="data:image/png;base64,{}"/>"#,
             image.x - image.width / 2.0,
@@ -306,43 +323,47 @@ fn build_scene(
             encoded
         )
         .expect("formatting into a String cannot fail");
-        svg.push_str("</g>\n");
-    }
+            svg.push_str("</g>\n");
+        }
 
-    for object in &plan.objects {
-        if !plan.item_visible(&object.id) {
-            continue;
-        }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&object.id))
+        for object in &plan.objects {
+            if !(lookup.item_visible(&object.id) && lookup.layer_id_for(&object.id) == layer_id) {
+                continue;
+            }
+            writeln!(
+                svg,
+                r#"<g opacity="{:.3}">"#,
+                lookup.item_opacity(&object.id)
+            )
             .expect("formatting into a String cannot fail");
-        let points = rotated_rectangle(
-            object.x,
-            object.y,
-            object.width,
-            object.height,
-            object.rotation,
-        );
-        write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
-        for point in points {
-            write!(svg, "{:.3},{:.3} ", point.x, point.y)
-                .expect("formatting into a String cannot fail");
-        }
-        writeln!(
-            svg,
-            r#"" fill="{}" fill-opacity="0.82" stroke="{}" stroke-width="1.3"/>"#,
-            svg_color(object.fill_color),
-            svg_color(object.stroke_color)
-        )
-        .expect("formatting into a String cannot fail");
-        let label_key = match object.kind {
-            ObjectKind::Rectangle => "object.rectangle",
-            ObjectKind::Bed => "object.bed",
-            ObjectKind::Table => "object.table",
-            ObjectKind::Sofa => "object.sofa",
-            ObjectKind::Wardrobe => "object.wardrobe",
-            ObjectKind::Desk => "object.desk",
-        };
-        writeln!(
+            let points = rotated_rectangle(
+                object.x,
+                object.y,
+                object.width,
+                object.height,
+                object.rotation,
+            );
+            write!(svg, r#"<polygon points=""#).expect("formatting into a String cannot fail");
+            for point in points {
+                write!(svg, "{:.3},{:.3} ", point.x, point.y)
+                    .expect("formatting into a String cannot fail");
+            }
+            writeln!(
+                svg,
+                r#"" fill="{}" fill-opacity="0.82" stroke="{}" stroke-width="1.3"/>"#,
+                svg_color(object.fill_color),
+                svg_color(object.stroke_color)
+            )
+            .expect("formatting into a String cannot fail");
+            let label_key = match object.kind {
+                ObjectKind::Rectangle => "object.rectangle",
+                ObjectKind::Bed => "object.bed",
+                ObjectKind::Table => "object.table",
+                ObjectKind::Sofa => "object.sofa",
+                ObjectKind::Wardrobe => "object.wardrobe",
+                ObjectKind::Desk => "object.desk",
+            };
+            writeln!(
             svg,
             r#"<text x="{:.3}" y="{:.3}" text-anchor="middle" dominant-baseline="central" font-family="Arial, sans-serif" font-size="12" fill="{}">{}</text>"#,
             object.x,
@@ -351,19 +372,19 @@ fn build_scene(
             escape_xml(object.display_name(&localizer.text(label_key)))
         )
         .expect("formatting into a String cannot fail");
-        svg.push_str("</g>\n");
-    }
-
-    for text in &plan.texts {
-        if !plan.item_visible(&text.id) {
-            continue;
+            svg.push_str("</g>\n");
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&text.id))
-            .expect("formatting into a String cannot fail");
-        for (index, line) in text.text.lines().enumerate() {
-            let line_count = text.text.lines().count().max(1) as f32;
-            let offset = (index as f32 - (line_count - 1.0) / 2.0) * text.size * 1.2;
-            writeln!(
+
+        for text in &plan.texts {
+            if !(lookup.item_visible(&text.id) && lookup.layer_id_for(&text.id) == layer_id) {
+                continue;
+            }
+            writeln!(svg, r#"<g opacity="{:.3}">"#, lookup.item_opacity(&text.id))
+                .expect("formatting into a String cannot fail");
+            for (index, line) in text.text.lines().enumerate() {
+                let line_count = text.text.lines().count().max(1) as f32;
+                let offset = (index as f32 - (line_count - 1.0) / 2.0) * text.size * 1.2;
+                writeln!(
                 svg,
                 r#"<text x="{:.3}" y="{:.3}" text-anchor="middle" dominant-baseline="central" font-family="Arial, sans-serif" font-size="{:.3}" font-weight="{}" fill="{}" transform="rotate({:.3} {:.3} {:.3})">{}</text>"#,
                 text.x,
@@ -377,32 +398,32 @@ fn build_scene(
                 escape_xml(line)
             )
             .expect("formatting into a String cannot fail");
+            }
+            svg.push_str("</g>\n");
         }
-        svg.push_str("</g>\n");
-    }
-    for line in &plan.lines {
-        if !plan.item_visible(&line.id) {
-            continue;
+        for line in &plan.lines {
+            if !(lookup.item_visible(&line.id) && lookup.layer_id_for(&line.id) == layer_id) {
+                continue;
+            }
+            writeln!(svg, r#"<g opacity="{:.3}">"#, lookup.item_opacity(&line.id))
+                .expect("formatting into a String cannot fail");
+            write_line(
+                &mut svg,
+                line.start(),
+                line.end(),
+                1.5,
+                &svg_color(line.color),
+            );
+            svg.push_str("</g>\n");
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&line.id))
-            .expect("formatting into a String cannot fail");
-        write_line(
-            &mut svg,
-            line.start(),
-            line.end(),
-            1.5,
-            &svg_color(line.color),
-        );
-        svg.push_str("</g>\n");
-    }
 
-    for wall in &plan.walls {
-        if !plan.item_visible(&wall.id) {
-            continue;
-        }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&wall.id))
-            .expect("formatting into a String cannot fail");
-        writeln!(
+        for wall in &plan.walls {
+            if !(lookup.item_visible(&wall.id) && lookup.layer_id_for(&wall.id) == layer_id) {
+                continue;
+            }
+            writeln!(svg, r#"<g opacity="{:.3}">"#, lookup.item_opacity(&wall.id))
+                .expect("formatting into a String cannot fail");
+            writeln!(
             svg,
             r#"<line x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}" stroke="{}" stroke-width="{:.3}" stroke-linecap="square"/>"#,
             wall.x1,
@@ -413,76 +434,87 @@ fn build_scene(
             wall.thickness
         )
         .expect("formatting into a String cannot fail");
-        svg.push_str("</g>\n");
-    }
-
-    for door in &plan.doors {
-        if !plan.item_visible(&door.id) {
-            continue;
+            svg.push_str("</g>\n");
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&door.id))
-            .expect("formatting into a String cannot fail");
-        if let Some(wall) = plan.walls.iter().find(|wall| wall.id == door.wall_id) {
+
+        for door in &plan.doors {
+            if !(lookup.item_visible(&door.id) && lookup.layer_id_for(&door.id) == layer_id) {
+                continue;
+            }
+            let Some(wall) = walls_by_id.get(door.wall_id.as_str()).copied() else {
+                continue;
+            };
+            if !lookup.item_visible(&wall.id) {
+                continue;
+            }
+            writeln!(svg, r#"<g opacity="{:.3}">"#, lookup.item_opacity(&door.id))
+                .expect("formatting into a String cannot fail");
             write_door(&mut svg, door, wall);
+            svg.push_str("</g>\n");
         }
-        svg.push_str("</g>\n");
-    }
-    for window in &plan.windows {
-        if !plan.item_visible(&window.id) {
-            continue;
-        }
-        let Some(wall) = plan.walls.iter().find(|wall| wall.id == window.wall_id) else {
-            continue;
-        };
-        let length = wall.length();
-        if length <= f32::EPSILON {
-            continue;
-        }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&window.id))
+        for window in &plan.windows {
+            if !(lookup.item_visible(&window.id) && lookup.layer_id_for(&window.id) == layer_id) {
+                continue;
+            }
+            let Some(wall) = walls_by_id.get(window.wall_id.as_str()).copied() else {
+                continue;
+            };
+            if !lookup.item_visible(&wall.id) {
+                continue;
+            }
+            let length = wall.length();
+            if length <= f32::EPSILON {
+                continue;
+            }
+            writeln!(
+                svg,
+                r#"<g opacity="{:.3}">"#,
+                lookup.item_opacity(&window.id)
+            )
             .expect("formatting into a String cannot fail");
-        let ux = (wall.x2 - wall.x1) / length;
-        let uy = (wall.y2 - wall.y1) / length;
-        let center = wall.point_at(window.t);
-        let start = Point::new(
-            center.x - ux * window.width / 2.0,
-            center.y - uy * window.width / 2.0,
-        );
-        let end = Point::new(
-            center.x + ux * window.width / 2.0,
-            center.y + uy * window.width / 2.0,
-        );
-        write_line(&mut svg, start, end, wall.thickness + 4.0, "#ffffff");
-        let offsets: &[f32] = if window.kind == WindowKind::Bay {
-            &[-0.35, 0.0, 0.35]
-        } else {
-            &[-0.25, 0.25]
-        };
-        for offset in offsets {
-            let distance = wall.thickness * offset;
-            write_line(
-                &mut svg,
-                Point::new(start.x - uy * distance, start.y + ux * distance),
-                Point::new(end.x - uy * distance, end.y + ux * distance),
-                1.6,
-                &svg_color(window.color),
+            let ux = (wall.x2 - wall.x1) / length;
+            let uy = (wall.y2 - wall.y1) / length;
+            let center = wall.point_at(window.t);
+            let start = Point::new(
+                center.x - ux * window.width / 2.0,
+                center.y - uy * window.width / 2.0,
             );
+            let end = Point::new(
+                center.x + ux * window.width / 2.0,
+                center.y + uy * window.width / 2.0,
+            );
+            write_line(&mut svg, start, end, wall.thickness + 4.0, "#ffffff");
+            let offsets: &[f32] = if window.kind == WindowKind::Bay {
+                &[-0.35, 0.0, 0.35]
+            } else {
+                &[-0.25, 0.25]
+            };
+            for offset in offsets {
+                let distance = wall.thickness * offset;
+                write_line(
+                    &mut svg,
+                    Point::new(start.x - uy * distance, start.y + ux * distance),
+                    Point::new(end.x - uy * distance, end.y + ux * distance),
+                    1.6,
+                    &svg_color(window.color),
+                );
+            }
+            svg.push_str("</g>\n");
         }
-        svg.push_str("</g>\n");
-    }
 
-    for compass in &plan.compasses {
-        if !plan.item_visible(&compass.id) {
-            continue;
-        }
-        writeln!(
-            svg,
-            r#"<g opacity="{:.3}">"#,
-            plan.item_opacity(&compass.id)
-        )
-        .expect("formatting into a String cannot fail");
-        let radius = compass.size * 0.5;
-        let color = svg_color(compass.color);
-        writeln!(
+        for compass in &plan.compasses {
+            if !(lookup.item_visible(&compass.id) && lookup.layer_id_for(&compass.id) == layer_id) {
+                continue;
+            }
+            writeln!(
+                svg,
+                r#"<g opacity="{:.3}">"#,
+                lookup.item_opacity(&compass.id)
+            )
+            .expect("formatting into a String cannot fail");
+            let radius = compass.size * 0.5;
+            let color = svg_color(compass.color);
+            writeln!(
             svg,
             r#"<g transform="rotate({:.3} {:.3} {:.3})"><circle cx="{:.3}" cy="{:.3}" r="{:.3}" fill="none" stroke="{}" stroke-width="1.3"/><line x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}" stroke="{}" stroke-width="2"/><polygon points="{:.3},{:.3} {:.3},{:.3} {:.3},{:.3}" fill="{}"/><text x="{:.3}" y="{:.3}" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="{}">N</text></g>"#,
             compass.rotation,
@@ -509,84 +541,88 @@ fn build_scene(
             color
         )
         .expect("formatting into a String cannot fail");
-        svg.push_str("</g>\n");
-    }
-
-    for arrow in &plan.arrows {
-        if !plan.item_visible(&arrow.id) {
-            continue;
+            svg.push_str("</g>\n");
         }
-        writeln!(svg, r#"<g opacity="{:.3}">"#, plan.item_opacity(&arrow.id))
+
+        for arrow in &plan.arrows {
+            if !(lookup.item_visible(&arrow.id) && lookup.layer_id_for(&arrow.id) == layer_id) {
+                continue;
+            }
+            writeln!(
+                svg,
+                r#"<g opacity="{:.3}">"#,
+                lookup.item_opacity(&arrow.id)
+            )
             .expect("formatting into a String cannot fail");
-        let start = Point::new(arrow.x, arrow.y);
-        let end = arrow.end();
-        let angle = arrow.angle_degrees().to_radians();
-        let ux = angle.cos();
-        let uy = angle.sin();
-        let px = -uy;
-        let py = ux;
-        let head_length = (arrow.width * 1.8).min(arrow.length * 0.55).max(2.0);
-        let head_half = arrow.width.max(2.0);
-        let base = Point::new(end.x - ux * head_length, end.y - uy * head_length);
-        let left = Point::new(base.x + px * head_half, base.y + py * head_half);
-        let right = Point::new(base.x - px * head_half, base.y - py * head_half);
-        let color = svg_color(arrow.color);
-        match arrow.style {
-            ArrowStyle::Open | ArrowStyle::OpenBold => {
-                let stroke = if arrow.style == ArrowStyle::OpenBold {
-                    (arrow.width * 0.22).max(2.4)
-                } else {
-                    (arrow.width * 0.10).max(1.4)
-                };
-                write_line(&mut svg, start, end, stroke, &color);
-                writeln!(
+            let start = Point::new(arrow.x, arrow.y);
+            let end = arrow.end();
+            let angle = arrow.angle_degrees().to_radians();
+            let ux = angle.cos();
+            let uy = angle.sin();
+            let px = -uy;
+            let py = ux;
+            let head_length = (arrow.width * 1.8).min(arrow.length * 0.55).max(2.0);
+            let head_half = arrow.width.max(2.0);
+            let base = Point::new(end.x - ux * head_length, end.y - uy * head_length);
+            let left = Point::new(base.x + px * head_half, base.y + py * head_half);
+            let right = Point::new(base.x - px * head_half, base.y - py * head_half);
+            let color = svg_color(arrow.color);
+            match arrow.style {
+                ArrowStyle::Open | ArrowStyle::OpenBold => {
+                    let stroke = if arrow.style == ArrowStyle::OpenBold {
+                        (arrow.width * 0.22).max(2.4)
+                    } else {
+                        (arrow.width * 0.10).max(1.4)
+                    };
+                    write_line(&mut svg, start, end, stroke, &color);
+                    writeln!(
                     svg,
                     r#"<polyline points="{:.3},{:.3} {:.3},{:.3} {:.3},{:.3}" fill="none" stroke="{}" stroke-width="{:.3}" stroke-linejoin="miter"/>"#,
                     left.x, left.y, end.x, end.y, right.x, right.y, color, stroke
                 )
                 .expect("formatting into a String cannot fail");
-            }
-            ArrowStyle::Hollow => {
-                write_line(&mut svg, start, base, (arrow.width * 0.12).max(1.5), &color);
-                writeln!(
+                }
+                ArrowStyle::Hollow => {
+                    write_line(&mut svg, start, base, (arrow.width * 0.12).max(1.5), &color);
+                    writeln!(
                     svg,
                     r##"<polygon points="{:.3},{:.3} {:.3},{:.3} {:.3},{:.3}" fill="#ffffff" stroke="{}" stroke-width="{:.3}"/>"##,
                     left.x, left.y, end.x, end.y, right.x, right.y, color,
                     (arrow.width * 0.12).max(1.5)
                 )
                 .expect("formatting into a String cannot fail");
-            }
-            ArrowStyle::Solid => {
-                let shaft_half = (arrow.width * 0.28).max(1.0);
-                let s1 = Point::new(start.x + px * shaft_half, start.y + py * shaft_half);
-                let s2 = Point::new(base.x + px * shaft_half, base.y + py * shaft_half);
-                let s3 = Point::new(base.x - px * shaft_half, base.y - py * shaft_half);
-                let s4 = Point::new(start.x - px * shaft_half, start.y - py * shaft_half);
-                writeln!(
+                }
+                ArrowStyle::Solid => {
+                    let shaft_half = (arrow.width * 0.28).max(1.0);
+                    let s1 = Point::new(start.x + px * shaft_half, start.y + py * shaft_half);
+                    let s2 = Point::new(base.x + px * shaft_half, base.y + py * shaft_half);
+                    let s3 = Point::new(base.x - px * shaft_half, base.y - py * shaft_half);
+                    let s4 = Point::new(start.x - px * shaft_half, start.y - py * shaft_half);
+                    writeln!(
                     svg,
                     r#"<polygon points="{:.3},{:.3} {:.3},{:.3} {:.3},{:.3} {:.3},{:.3} {:.3},{:.3} {:.3},{:.3} {:.3},{:.3}" fill="{}"/>"#,
                     s1.x, s1.y, s2.x, s2.y, left.x, left.y, end.x, end.y,
                     right.x, right.y, s3.x, s3.y, s4.x, s4.y, color
                 )
                 .expect("formatting into a String cannot fail");
+                }
             }
+            svg.push_str("</g>\n");
         }
-        svg.push_str("</g>\n");
-    }
 
-    if include_distances {
-        for wall in &plan.walls {
-            if plan.item_visible(&wall.id) {
-                write_distance_label(&mut svg, wall.start(), wall.end(), wall.length());
+        if include_distances {
+            for wall in &plan.walls {
+                if lookup.item_visible(&wall.id) && lookup.layer_id_for(&wall.id) == layer_id {
+                    write_distance_label(&mut svg, wall.start(), wall.end(), wall.length());
+                }
             }
-        }
-        for line in &plan.lines {
-            if plan.item_visible(&line.id) {
-                write_distance_label(&mut svg, line.start(), line.end(), line.length());
+            for line in &plan.lines {
+                if lookup.item_visible(&line.id) && lookup.layer_id_for(&line.id) == layer_id {
+                    write_distance_label(&mut svg, line.start(), line.end(), line.length());
+                }
             }
         }
     }
-
     svg.push_str("</svg>\n");
     Ok(ExportScene {
         svg,
@@ -795,6 +831,12 @@ fn build_single_image_pdf(
 }
 
 fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
+    let lookup = crate::model::LayerLookup::new(plan);
+    let walls_by_id: HashMap<&str, &Wall> = plan
+        .walls
+        .iter()
+        .map(|wall| (wall.id.as_str(), wall))
+        .collect();
     let mut bounds: Option<(Point, Point)> = None;
     let mut include = |point: Point| {
         bounds = Some(match bounds {
@@ -806,21 +848,24 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         });
     };
     for wall in &plan.walls {
-        if !plan.item_visible(&wall.id) {
+        if !lookup.item_visible(&wall.id) {
             continue;
         }
-        include(wall.start());
-        include(wall.end());
+        let radius = wall.thickness * 0.5;
+        for point in [wall.start(), wall.end()] {
+            include(Point::new(point.x - radius, point.y - radius));
+            include(Point::new(point.x + radius, point.y + radius));
+        }
     }
     for line in &plan.lines {
-        if !plan.item_visible(&line.id) {
+        if !lookup.item_visible(&line.id) {
             continue;
         }
         include(line.start());
         include(line.end());
     }
     for object in &plan.objects {
-        if !plan.item_visible(&object.id) {
+        if !lookup.item_visible(&object.id) {
             continue;
         }
         for point in rotated_rectangle(
@@ -834,7 +879,7 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for image in &plan.images {
-        if !plan.item_visible(&image.id) {
+        if !lookup.item_visible(&image.id) {
             continue;
         }
         for point in rotated_rectangle(image.x, image.y, image.width, image.height, image.rotation)
@@ -843,7 +888,7 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for text in &plan.texts {
-        if !plan.item_visible(&text.id) {
+        if !lookup.item_visible(&text.id) {
             continue;
         }
         let (width, height) = text_dimensions(text);
@@ -852,7 +897,7 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for area in &plan.areas {
-        if !plan.item_visible(&area.id) {
+        if !lookup.item_visible(&area.id) {
             continue;
         }
         for point in &area.points {
@@ -860,7 +905,7 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for room in &plan.rooms {
-        if !plan.item_visible(&room.id) {
+        if !lookup.item_visible(&room.id) {
             continue;
         }
         for point in &room.points {
@@ -868,7 +913,7 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         }
     }
     for compass in &plan.compasses {
-        if !plan.item_visible(&compass.id) {
+        if !lookup.item_visible(&compass.id) {
             continue;
         }
         let radius = compass.size * 0.6;
@@ -876,7 +921,7 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         include(Point::new(compass.x + radius, compass.y + radius));
     }
     for arrow in &plan.arrows {
-        if !plan.item_visible(&arrow.id) {
+        if !lookup.item_visible(&arrow.id) {
             continue;
         }
         let end = arrow.end();
@@ -887,12 +932,15 @@ fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
         include(Point::new(end.x + radius, end.y + radius));
     }
     for door in &plan.doors {
-        if !plan.item_visible(&door.id) {
+        if !lookup.item_visible(&door.id) {
             continue;
         }
-        let Some(wall) = plan.walls.iter().find(|wall| wall.id == door.wall_id) else {
+        let Some(wall) = walls_by_id.get(door.wall_id.as_str()).copied() else {
             continue;
         };
+        if !lookup.item_visible(&wall.id) {
+            continue;
+        }
         let center = wall.point_at(door.t);
         let radius = door.width;
         include(Point::new(center.x - radius, center.y - radius));
@@ -946,6 +994,17 @@ fn area_center(area: &crate::model::AreaShape) -> Point {
 
 fn escape_xml(value: &str) -> String {
     value
+        .chars()
+        .map(|character| {
+            if matches!(character, '\t' | '\n' | '\r')
+                || character >= '\u{20}' && character != '\u{fffe}' && character != '\u{ffff}'
+            {
+                character
+            } else {
+                '\u{fffd}'
+            }
+        })
+        .collect::<String>()
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -1116,5 +1175,85 @@ mod tests {
         let result = export_pdf_a4(&path, &test_plan(), &[], &Localizer::load(), false, 1);
         assert!(result.is_err());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn layer_order_controls_export_stacking_across_different_item_types() {
+        let mut plan = test_plan();
+        plan.layers.push(crate::model::Layer {
+            id: "top".into(),
+            name: "Top".into(),
+            ..crate::model::Layer::default()
+        });
+        plan.walls[0].color = [1, 2, 3];
+        plan.assign_to_layer(&plan.walls[0].id.clone(), "top");
+        plan.texts.push(TextObject {
+            id: "label".into(),
+            text: "below-the-wall".into(),
+            x: 30.0,
+            y: 30.0,
+            size: 12.0,
+            rotation: 0.0,
+            color: [0, 0, 0],
+            bold: false,
+            locked: false,
+        });
+        let scene = build_scene(&plan, &[], &Localizer::load(), false).expect("scene");
+        assert!(
+            scene.svg.find("below-the-wall").expect("text")
+                < scene.svg.find("#010203").expect("wall")
+        );
+        plan.layers.swap(0, 1);
+        let scene = build_scene(&plan, &[], &Localizer::load(), false).expect("scene");
+        assert!(
+            scene.svg.find("#010203").expect("wall")
+                < scene.svg.find("below-the-wall").expect("text")
+        );
+    }
+
+    #[test]
+    fn hidden_parent_walls_do_not_leave_open_svg_groups_or_orphan_openings() {
+        let mut plan = test_plan();
+        plan.layers.push(crate::model::Layer {
+            id: "hidden".into(),
+            name: "Hidden".into(),
+            visible: false,
+            ..crate::model::Layer::default()
+        });
+        let wall_id = plan.walls[0].id.clone();
+        plan.assign_to_layer(&wall_id, "hidden");
+        plan.doors.push(crate::model::Door {
+            id: "door".into(),
+            wall_id,
+            t: 0.5,
+            width: 20.0,
+            kind: crate::model::DoorKind::Single,
+            hinge: crate::model::HingeSide::Left,
+            swing: crate::model::SwingSide::Inward,
+            color: [18, 52, 86],
+            locked: false,
+        });
+        plan.lines.push(PlanLine {
+            id: "visible-line".into(),
+            x1: 0.0,
+            y1: 0.0,
+            x2: 100.0,
+            y2: 0.0,
+            color: [0, 0, 0],
+            locked: false,
+        });
+        let scene = build_scene(&plan, &[], &Localizer::load(), false).expect("scene");
+        assert!(!scene.svg.contains("#123456"));
+        assert!(resvg::usvg::roxmltree::Document::parse(&scene.svg).is_ok());
+    }
+
+    #[test]
+    fn thick_walls_and_xml_control_characters_export_safely() {
+        let mut plan = test_plan();
+        plan.walls[0].thickness = 500.0;
+        let (minimum, maximum) = super::export_bounds(&plan).expect("bounds");
+        assert!(minimum.y <= plan.walls[0].y1 - 250.0);
+        assert!(maximum.y >= plan.walls[0].y1 + 250.0);
+        assert_eq!(super::escape_xml("A\0B & <"), "A\u{fffd}B &amp; &lt;");
     }
 }
