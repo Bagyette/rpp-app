@@ -1,7 +1,7 @@
 # RPP project container and RPP-PLAN specification
 
-This specification describes the RPP 0.9.1 project reader/writer and the current
-working-tree recovery implementation. Portable projects use two simple layers:
+This specification describes the RPP 0.9.2 project reader/writer and recovery
+implementation. Portable projects use two simple layers:
 
 1. **RPP project container** — the ZIP-compatible binary file carrying the
    `.rpp` extension;
@@ -123,7 +123,7 @@ The first non-empty, non-comment instruction must be:
 RPP-PLAN 2
 ```
 
-The RPP-PLAN version is independent from the application version. RPP 0.9.1
+The RPP-PLAN version is independent from the application version. RPP 0.9.2
 writes version 2.
 
 The legacy header below is still accepted:
@@ -841,7 +841,7 @@ Text syntax errors include a one-based line number.
 
 ## 7. Security and complexity limits
 
-RPP 0.9.1 applies these limits:
+RPP 0.9.2 applies these limits:
 
 | Resource | Limit |
 |---|---:|
@@ -874,7 +874,7 @@ arbitrary stored paths, preventing path traversal during normal loading.
 
 ## 8. Compatibility and migration
 
-RPP 0.9.1 can open:
+RPP 0.9.2 can open:
 
 - packaged `.rpp` ZIP containers containing `RPP-PLAN 2`;
 - standalone readable `RPP-PLAN 2` text;
@@ -988,7 +988,7 @@ the document can still be opened and edited.
 
 ## 11. Recovery sessions (internal, not a portable project)
 
-The current working tree stores recovery in the platform's `autosave.rpp` path,
+RPP 0.9.2 stores recovery in the platform's `autosave.rpp` path,
 but the new session envelope is **not** the ZIP project container described
 above. Do not rename it to ZIP or use it as a normal project file. An explicit
 Save still writes the unchanged ZIP/RPP-PLAN 2 format.

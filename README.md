@@ -13,7 +13,7 @@ ships as a portable Windows executable, a macOS application, or a Linux binary.
 There is no Electron bundle, account
 or telemetry.
 
-Current version: **0.9.1**. Expect missing tools and occasional rough edges
+Current version: **0.9.2**. Expect missing tools and occasional rough edges
 while the editor is still below 1.0.
 
 ## Download
@@ -23,10 +23,10 @@ Native builds are published on the
 
 | System | Download |
 |---|---|
-| Windows 10/11, x64 | `RPP-0.9.1-windows-x64.exe` |
-| macOS, Apple Silicon | `RPP-0.9.1-macos-arm64.zip` |
-| macOS, Intel | `RPP-0.9.1-macos-x64.zip` |
-| Linux, x64 | `RPP-0.9.1-linux-x64.tar.gz` |
+| Windows 10/11, x64 | `RPP-0.9.2-windows-x64.exe` |
+| macOS, Apple Silicon | `RPP-0.9.2-macos-arm64.zip` |
+| macOS, Intel | `RPP-0.9.2-macos-x64.zip` |
+| Linux, x64 | `RPP-0.9.2-linux-x64.tar.gz` |
 
 On Windows, run the executable directly. On macOS, extract `RPP.app` and place
 it in Applications or your user Applications folder. On Linux, extract the
@@ -99,7 +99,8 @@ What already works:
 - multi-selection, rectangular selection, alignment and up to 100 undo/redo states
   within a 64 MiB history allocation budget;
 - millimeters, centimeters, meters, inches and feet;
-- SVG, PNG and vector one-page PDF export at a chosen scale;
+- SVG, PNG and vector one-page PDF export at a chosen scale
+  (PDF text is outlined and cannot be selected/copied as text);
 - English, French and Spanish;
 - Light, Dark and Warm Dark themes.
 
@@ -205,7 +206,7 @@ GitHub Actions runs formatting, Clippy, tests and release builds on all four
 platform/architecture combinations. On `main`, a new version in `Cargo.toml`
 is published only after all jobs pass; an existing release is left unchanged.
 See [STYLE.md](STYLE.md) for code conventions and the Google Rust style review.
-The [0.9.1 audit report](AUDIT.md) records fixes, verification and remaining limits.
+The [0.9.2 audit report](AUDIT.md) records fixes, verification and remaining limits.
 
 The release profile favors a small binary: size optimization, fat LTO, one code
 generation unit and stripped symbols are enabled in `Cargo.toml`.

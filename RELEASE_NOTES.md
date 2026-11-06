@@ -1,40 +1,24 @@
-RPP 0.9.1 fixes data-integrity, editing and export problems found during a source
-and interactive audit of 0.9.0. All platforms continue to use the same Rust code.
+RPP 0.9.2 improves recovery, undo/redo, PDF quality and responsiveness on all four native builds.
 
-Fixes:
-- Atomic project, recovery, preferences and export writes, with unique temporary
-  files and preservation of the previous project if backup/replacement fails.
-- Bounded disk reads, ZIP expansion and legacy decompression; shared raster
-  decoder limits and a cumulative decoded-image memory budget.
-- Locked objects and layers are protected from deletion, nudging, splitting and
-  stale-selection drags. The unlock control remains visible above properties.
-- Group actions preserve older undo entries. Cancelled drags restore their
-  preview, and new/open/undo reset every transient tool state.
-- Invalid edits roll back, orphan layer assignments are removed, text limits
-  preserve UTF-8, and malformed settings cannot introduce invalid geometry.
-- Automatic room metadata retains its layer after geometry changes. Detection
-  has a bounded work budget and retains existing rooms if that budget is exceeded.
-- Exports follow layer order, hide openings whose parent wall is hidden, include
-  thick wall extents and handle XML control characters safely.
-- Layer lookups are indexed for rendering/export, and layer opacity is applied
-  once to the whole canvas layer.
-- Save/recovery errors are visible in the status bar. Native application exit
-  writes recovery for committed unsaved changes.
-- Updated ZIP, browser integration, SVG/text rendering and YAML dependencies;
-  removed unused legacy dependency features and withdrawn dependency versions.
-- Release packages verify binary architecture. Publication uploads to a draft
-  first and only publishes after all platform and dependency checks succeed.
+- Recovery retains the original project path and unsaved state. Saved, discarded,
+  new and undo-to-saved sessions no longer reopen as unsaved documents.
+- Undo/redo updates the modified flag by comparing with the last saved content.
+- PDF export keeps walls, shapes and text as vector geometry. Text is outlined,
+  so it stays sharp when zooming but cannot be selected/copied as text. Imported
+  images remain raster. The obsolete PDF font dependencies have been removed.
+- Undo and redo share an estimated 64 MiB allocation budget and a 100-state limit;
+  shared image resources are counted once.
+- Opening, save/recovery compression and exports run in a serialized background
+  queue. Room detection above 128 walls runs there too, with an activity indicator.
+  Foreground tasks temporarily pause editing; recovery continues while editing.
+- Updated RPP_FORMAT.md, including the internal recovery envelope. Portable
+  project files still use the ZIP container and RPP-PLAN 2 language.
 
-See AUDIT.md for verification and practical limits. Windows binaries are unsigned;
-macOS apps have an ad-hoc signature and are not Apple notarized. Native pinch
-availability depends on the OS, driver and windowing backend.
+Validation: 87 regression tests, strict Clippy, formatting, dependency audit and
+native builds are checked by GitHub Actions for Windows x64, Linux x64,
+macOS Apple Silicon and macOS Intel before publication.
 
-Working-tree corrections (not yet published):
-- Recovery sessions retain the source path and clean/unsaved status; saving or
-  discarding a document clears its recovery, including undo back to saved content.
-- PDF export preserves vector paths and text; imported raster images remain raster.
-- Undo/redo share a 64 MiB allocation budget as well as the 100-state limit.
-- Opening, compression, recovery and exports run off-thread; room recalculation
-  above 128 walls shows an activity indicator while the worker finishes.
-- Updated the project-format specification and documented the internal recovery
-  envelope separately from portable RPP-PLAN 2 projects.
+Snapshot cloning, validation and painting still use the UI thread; very large
+plans can still pause briefly. Windows is portable and unsigned. macOS apps
+have an ad-hoc signature and are not Apple notarized. Linux requires an
+Ubuntu 24.04-compatible runtime. See AUDIT.md for practical limits.

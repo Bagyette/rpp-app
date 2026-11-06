@@ -67,17 +67,19 @@ References: [ZIP advisory](https://rustsec.org/advisories/RUSTSEC-2026-0367.html
 - The existing editor architecture and approximate text/measurement extents are
   retained. Google-style exceptions are documented in STYLE.md.
 
-## Working-tree follow-up (2026-11-06, not yet published)
+## 0.9.2 follow-up (2026-11-06)
 
 Recovery now uses a single atomic session envelope with source path and an
 unsaved flag. Clean/discarded sessions write a marker without a project payload.
 Undo/redo compare with a retained saved snapshot. Both history stacks share an
 estimated 64 MiB owned-allocation budget, counting retained image assets once.
 
-PDF generation now converts SVG paths/text directly through `svg2pdf`; it no
-longer embeds a full-canvas screenshot. Imported raster assets retain their
-original raster nature. The PDF converter uses its own compatible usvg parser;
-font data/fallback selection comes from the same database as other exports.
+PDF generation outlines text through the current `resvg`/`usvg` renderer, then
+converts paths through `svg2pdf` with its text feature disabled. It no longer
+embeds a full-canvas screenshot or pulls the abandoned `rustybuzz`/`ttf-parser`
+font stack. Imported raster assets retain their raster nature. Fonts and
+fallback selection use the same database as other exports. PDF text is
+vector geometry, so it cannot be selected/copied as text.
 
 A serialized worker handles opening, project/recovery serialization, atomic
 writes and all export formats. Pending recovery work is coalesced. Room detection

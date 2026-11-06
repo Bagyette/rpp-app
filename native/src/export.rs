@@ -154,26 +154,33 @@ pub fn export_pdf(
     let page_svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{page_width}" height="{page_height}">{nested}</svg>"#
     );
-    let mut options = svg2pdf::usvg::Options::default();
-    let fonts = crate::platform::font_database();
-    for face in fonts.faces() {
-        fonts.with_face_data(face.id, |bytes, _| {
-            options.fontdb_mut().load_font_data(bytes.to_vec())
-        });
-    }
-    // Match the family fallback chosen by the canvas/raster exporter.
-    options
-        .fontdb_mut()
-        .set_sans_serif_family(fonts.family_name(&resvg::usvg::fontdb::Family::SansSerif));
-    let tree =
-        svg2pdf::usvg::Tree::from_str(&page_svg, &options).map_err(|error| error.to_string())?;
+    // Outline text with the maintained renderer before handing paths to the PDF
+    // writer. This avoids the obsolete font stack in svg2pdf's text feature.
+    let vector_svg = outlined_svg(&page_svg)?;
+    let tree = svg2pdf::usvg::Tree::from_str(&vector_svg, &svg2pdf::usvg::Options::default())
+        .map_err(|error| error.to_string())?;
     let pdf = svg2pdf::to_pdf(
         &tree,
-        svg2pdf::ConversionOptions::default(),
+        svg2pdf::ConversionOptions {
+            embed_text: false,
+            ..Default::default()
+        },
         svg2pdf::PageOptions::default(),
     )
     .map_err(|error| error.to_string())?;
     crate::storage::write_atomic(path, &pdf).map_err(|error| error.to_string())
+}
+
+fn outlined_svg(svg: &str) -> Result<String, String> {
+    let options = usvg::Options {
+        fontdb: crate::platform::font_database(),
+        ..usvg::Options::default()
+    };
+    let tree = usvg::Tree::from_str(svg, &options).map_err(|error| error.to_string())?;
+    Ok(tree.to_string(&usvg::WriteOptions {
+        preserve_text: false,
+        ..Default::default()
+    }))
 }
 
 fn build_scene(
@@ -1090,8 +1097,33 @@ mod tests {
     #[test]
     fn pdf_export_writes_one_scaled_a4_page() {
         let path = std::env::temp_dir().join(format!("rpp-a4-export-{}.pdf", std::process::id()));
-        export_pdf_a4(&path, &test_plan(), &[], &Localizer::load(), false, 50)
-            .expect("A4 PDF export");
+        let mut plan = test_plan();
+        plan.texts.push(TextObject {
+            id: "pdf-label".into(),
+            text: "Pièce été 42".into(),
+            x: 100.0,
+            y: 40.0,
+            size: 18.0,
+            rotation: 0.0,
+            color: [52, 56, 59],
+            bold: true,
+            locked: false,
+        });
+        let with_text = super::outlined_svg(
+            &build_scene(&plan, &[], &Localizer::load(), false)
+                .expect("scene")
+                .svg,
+        )
+        .expect("outlined text");
+        let without_text = super::outlined_svg(
+            &build_scene(&test_plan(), &[], &Localizer::load(), false)
+                .expect("scene")
+                .svg,
+        )
+        .expect("outline");
+        assert!(!with_text.contains("<text"));
+        assert!(with_text.matches("<path").count() > without_text.matches("<path").count());
+        export_pdf_a4(&path, &plan, &[], &Localizer::load(), false, 50).expect("A4 PDF export");
         let bytes = std::fs::read(&path).expect("PDF file");
         assert!(bytes.starts_with(b"%PDF-"));
         assert!(!bytes.windows(15).any(|window| window == b"/Subtype /Image"));
