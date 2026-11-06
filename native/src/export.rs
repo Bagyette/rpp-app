@@ -140,38 +140,40 @@ pub fn export_pdf(
         ));
     }
 
-    let pixmap = render_scene(&scene)?;
-    let mut rgb = Vec::with_capacity((scene.width * scene.height * 3) as usize);
-    for pixel in pixmap.data().as_chunks::<4>().0 {
-        rgb.extend_from_slice(&pixel[..3]);
-    }
-    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 9);
+    // Keep the original viewBox inside a physical-size page. The PDF converter
+    // receives paths and text, rather than a screenshot limited to 4096 pixels.
     let x = (page_width - image_width_points) * 0.5;
     let y = (page_height - image_height_points) * 0.5;
-    let pdf = build_single_image_pdf(
-        &compressed,
-        scene.width,
-        scene.height,
-        page_width,
-        page_height,
-        x,
-        y,
-        image_width_points,
-        image_height_points,
+    let nested = scene.svg.replacen(
+        &format!("width=\"{}\" height=\"{}\"", scene.width, scene.height),
+        &format!(
+            "x=\"{x}\" y=\"{y}\" width=\"{image_width_points}\" height=\"{image_height_points}\""
+        ),
+        1,
     );
+    let page_svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{page_width}" height="{page_height}">{nested}</svg>"#
+    );
+    let mut options = svg2pdf::usvg::Options::default();
+    let fonts = crate::platform::font_database();
+    for face in fonts.faces() {
+        fonts.with_face_data(face.id, |bytes, _| {
+            options.fontdb_mut().load_font_data(bytes.to_vec())
+        });
+    }
+    // Match the family fallback chosen by the canvas/raster exporter.
+    options
+        .fontdb_mut()
+        .set_sans_serif_family(fonts.family_name(&resvg::usvg::fontdb::Family::SansSerif));
+    let tree =
+        svg2pdf::usvg::Tree::from_str(&page_svg, &options).map_err(|error| error.to_string())?;
+    let pdf = svg2pdf::to_pdf(
+        &tree,
+        svg2pdf::ConversionOptions::default(),
+        svg2pdf::PageOptions::default(),
+    )
+    .map_err(|error| error.to_string())?;
     crate::storage::write_atomic(path, &pdf).map_err(|error| error.to_string())
-}
-
-fn render_scene(scene: &ExportScene) -> Result<Pixmap, String> {
-    let options = usvg::Options {
-        fontdb: crate::platform::font_database(),
-        ..usvg::Options::default()
-    };
-    let tree = usvg::Tree::from_str(&scene.svg, &options).map_err(|error| error.to_string())?;
-    let mut pixmap =
-        Pixmap::new(scene.width, scene.height).ok_or_else(|| "Invalid export size".to_owned())?;
-    resvg::render(&tree, Transform::identity(), &mut pixmap.as_mut());
-    Ok(pixmap)
 }
 
 fn build_scene(
@@ -762,74 +764,6 @@ fn write_distance_label(svg: &mut String, start: Point, end: Point, centimeters:
     .expect("formatting into a String cannot fail");
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_single_image_pdf(
-    compressed_rgb: &[u8],
-    pixel_width: u32,
-    pixel_height: u32,
-    page_width: f32,
-    page_height: f32,
-    image_x: f32,
-    image_y: f32,
-    image_width: f32,
-    image_height: f32,
-) -> Vec<u8> {
-    fn push_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, number: usize, body: &[u8]) {
-        offsets.push(pdf.len());
-        pdf.extend_from_slice(format!("{number} 0 obj\n").as_bytes());
-        pdf.extend_from_slice(body);
-        pdf.extend_from_slice(b"\nendobj\n");
-    }
-
-    let mut pdf = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
-    let mut offsets = Vec::with_capacity(5);
-    push_object(
-        &mut pdf,
-        &mut offsets,
-        1,
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-    );
-    push_object(
-        &mut pdf,
-        &mut offsets,
-        2,
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    );
-    let page = format!(
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width:.3} {page_height:.3}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
-    );
-    push_object(&mut pdf, &mut offsets, 3, page.as_bytes());
-
-    let commands = format!(
-        "q\n{image_width:.3} 0 0 {image_height:.3} {image_x:.3} {image_y:.3} cm\n/Im0 Do\nQ\n"
-    );
-    let content = format!(
-        "<< /Length {} >>\nstream\n{}endstream",
-        commands.len(),
-        commands
-    );
-    push_object(&mut pdf, &mut offsets, 4, content.as_bytes());
-
-    let mut image = format!(
-        "<< /Type /XObject /Subtype /Image /Width {pixel_width} /Height {pixel_height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-        compressed_rgb.len()
-    )
-    .into_bytes();
-    image.extend_from_slice(compressed_rgb);
-    image.extend_from_slice(b"\nendstream");
-    push_object(&mut pdf, &mut offsets, 5, &image);
-
-    let xref_offset = pdf.len();
-    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
-    for offset in offsets {
-        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-    }
-    pdf.extend_from_slice(
-        format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes(),
-    );
-    pdf
-}
-
 fn export_bounds(plan: &PlanFile) -> Option<(Point, Point)> {
     let lookup = crate::model::LayerLookup::new(plan);
     let walls_by_id: HashMap<&str, &Wall> = plan
@@ -1159,8 +1093,9 @@ mod tests {
         export_pdf_a4(&path, &test_plan(), &[], &Localizer::load(), false, 50)
             .expect("A4 PDF export");
         let bytes = std::fs::read(&path).expect("PDF file");
-        assert!(bytes.starts_with(b"%PDF-1.4"));
-        assert!(bytes.windows(9).any(|window| window == b"/Count 1 "));
+        assert!(bytes.starts_with(b"%PDF-"));
+        assert!(!bytes.windows(15).any(|window| window == b"/Subtype /Image"));
+        assert!(String::from_utf8_lossy(&bytes).contains("/Count 1"));
         if std::env::var_os("RPP_KEEP_TEST_PDF").is_some() {
             println!("kept PDF at {}", path.display());
         } else {

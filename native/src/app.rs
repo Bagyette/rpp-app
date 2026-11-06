@@ -1,4 +1,5 @@
 mod inspectors;
+mod jobs;
 mod layers;
 mod render;
 mod rooms;
@@ -32,6 +33,8 @@ use crate::model::{
     default_window_color,
 };
 use crate::{export, images, input, platform, storage};
+
+const HISTORY_MEMORY_BUDGET: usize = 64 * 1024 * 1024;
 
 const GRID: f32 = 20.0;
 const MIN_WALL: f32 = 20.0;
@@ -524,6 +527,12 @@ pub struct RppApp {
     recovery_error: Option<String>,
     room_detection_limited: bool,
     dirty: bool,
+    saved_snapshot: Option<Snapshot>,
+    worker: jobs::Worker,
+    busy: bool,
+    #[cfg(test)]
+    synchronous_jobs: bool,
+    rooms_need_refresh: bool,
     pending_action: Option<PendingAction>,
     export_distances: bool,
     pdf_scale: u32,
@@ -604,6 +613,10 @@ impl RppApp {
     }
 
     fn from_context(context: egui::Context) -> Self {
+        Self::from_context_with_recovery(context, autosave_path())
+    }
+
+    fn from_context_with_recovery(context: egui::Context, recovery_path: Option<PathBuf>) -> Self {
         let settings = load_settings().sanitized();
         configure_style(&context, settings.theme);
         let mut localizer = Localizer::load();
@@ -668,10 +681,19 @@ impl RppApp {
             localizer,
             status: initial_status,
             current_file: None,
-            recovery_path: autosave_path(),
+            worker: jobs::Worker::new(context.clone()),
+            busy: false,
+            #[cfg(test)]
+            synchronous_jobs: false,
+            rooms_need_refresh: false,
+            recovery_path,
             recovery_error: None,
             room_detection_limited: false,
             dirty: false,
+            saved_snapshot: Some(Snapshot::from_project(
+                &PlanFile::default(),
+                &Arc::new(Vec::new()),
+            )),
             pending_action: None,
             export_distances: true,
             pdf_scale: 50,
@@ -692,17 +714,7 @@ impl RppApp {
         };
 
         app.rebuild_textures(&context);
-        if let Some(path) = &app.recovery_path
-            && let Ok(bytes) = storage::read_limited(path, crate::format::MAX_PROJECT_BYTES)
-            && let Ok(decoded) = decode_plan(&bytes)
-        {
-            app.plan = decoded.plan;
-            app.assets = Arc::new(decoded.assets);
-            app.refresh_automatic_rooms();
-            app.rebuild_textures(&context);
-            app.status = app.localizer.text("app.restored");
-            app.dirty = true;
-        }
+        app.restore_recovery(&context);
 
         app
     }
@@ -1515,14 +1527,11 @@ impl RppApp {
             self.status = self.format_error_text(&error);
             return;
         }
-        let after = self.snapshot();
-        if before != after {
+        if !before.matches_project(&self.plan, &self.assets) {
             self.past.push(before);
-            if self.past.len() > 100 {
-                self.past.remove(0);
-            }
             self.future.clear();
-            self.dirty = true;
+            self.trim_history(HISTORY_MEMORY_BUDGET);
+            self.update_dirty();
             self.autosave();
         }
     }
@@ -1564,22 +1573,237 @@ impl RppApp {
         }
     }
 
-    fn autosave(&mut self) {
+    fn update_dirty(&mut self) {
+        self.dirty = self
+            .saved_snapshot
+            .as_ref()
+            .is_none_or(|saved| !saved.matches_project(&self.plan, &self.assets));
+    }
+
+    fn trim_history(&mut self, budget: usize) {
+        let mut bytes = self.history_bytes();
+        while self.past.len() + self.future.len() > 100 || bytes > budget {
+            let removed = if !self.past.is_empty() {
+                self.past.remove(0)
+            } else if !self.future.is_empty() {
+                self.future.remove(0)
+            } else {
+                break;
+            };
+            bytes = bytes.saturating_sub(removed.memory_bytes());
+            if !Arc::ptr_eq(&self.assets, &removed.assets)
+                && !self
+                    .past
+                    .iter()
+                    .chain(&self.future)
+                    .any(|entry| Arc::ptr_eq(&entry.assets, &removed.assets))
+            {
+                bytes = bytes.saturating_sub(Self::asset_memory_bytes(&removed.assets));
+            }
+        }
+    }
+
+    fn asset_memory_bytes(assets: &Vec<ProjectAsset>) -> usize {
+        assets.capacity() * std::mem::size_of::<ProjectAsset>()
+            + assets
+                .iter()
+                .map(|asset| {
+                    asset.bytes.capacity()
+                        + asset.id.capacity()
+                        + asset.name.capacity()
+                        + asset.extension.capacity()
+                })
+                .sum::<usize>()
+    }
+
+    fn history_bytes(&self) -> usize {
+        let mut assets = std::collections::HashSet::new();
+        assets.insert(Arc::as_ptr(&self.assets));
+        self.past
+            .iter()
+            .chain(&self.future)
+            .map(|entry| {
+                entry.memory_bytes()
+                    + if assets.insert(Arc::as_ptr(&entry.assets)) {
+                        Self::asset_memory_bytes(&entry.assets)
+                    } else {
+                        0
+                    }
+            })
+            .sum()
+    }
+
+    fn restore_recovery(&mut self, context: &egui::Context) {
         let Some(path) = &self.recovery_path else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let result = encode_project(&self.plan, self.assets.as_slice())
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                storage::write_atomic(path, &bytes).map_err(|error| error.to_string())
-            });
-        self.recovery_error = result.err().map(|error| {
-            self.localizer
-                .format("status.autosave_error", &[("error", error)])
+        let Ok(Some((decoded, source))) = crate::recovery::load(path) else {
+            return;
+        };
+        self.plan = decoded.plan;
+        self.assets = Arc::new(decoded.assets);
+        self.current_file = source;
+        self.saved_snapshot = self.current_file.as_ref().and_then(|path| {
+            storage::read_limited(path, crate::format::MAX_PROJECT_BYTES)
+                .ok()
+                .and_then(|bytes| decode_plan(&bytes).ok())
+                .map(|decoded| Snapshot::from_project(&decoded.plan, &Arc::new(decoded.assets)))
         });
+        self.refresh_automatic_rooms();
+        self.update_dirty();
+        if !self.dirty {
+            self.autosave();
+        }
+        self.rebuild_textures(context);
+        self.status = self.localizer.text("app.restored");
+    }
+
+    fn autosave(&mut self) {
+        let Some(path) = self.recovery_path.clone() else {
+            return;
+        };
+        let plan = self.plan.clone();
+        let assets = Arc::clone(&self.assets);
+        let source = self.current_file.clone();
+        let unsaved = self.dirty;
+        self.run_job(true, move || {
+            jobs::Outcome::Recovery(crate::recovery::save(
+                &path,
+                &plan,
+                &assets,
+                source.as_deref(),
+                unsaved,
+            ))
+        });
+    }
+
+    fn dispatch_room_refresh(&mut self) {
+        if self.rooms_need_refresh && !self.busy {
+            self.rooms_need_refresh = false;
+            let mut plan = self.plan.clone();
+            self.run_job(false, move || {
+                let limited = rooms::refresh_rooms(&mut plan);
+                jobs::Outcome::Rooms { plan, limited }
+            });
+        }
+    }
+
+    fn run_job(&mut self, recovery: bool, task: impl FnOnce() -> jobs::Outcome + Send + 'static) {
+        if !recovery {
+            if self.busy {
+                return;
+            }
+            self.busy = true;
+        }
+        #[cfg(test)]
+        if self.synchronous_jobs {
+            self.finish_job(task());
+            return;
+        }
+        self.worker.submit(recovery, Box::new(task));
+    }
+
+    fn finish_job(&mut self, outcome: jobs::Outcome) {
+        if !matches!(
+            outcome,
+            jobs::Outcome::Recovery(_) | jobs::Outcome::Failed { recovery: true }
+        ) {
+            self.busy = false;
+        }
+        match outcome {
+            jobs::Outcome::Recovery(result) => {
+                self.recovery_error = result.err().map(|error| {
+                    self.localizer
+                        .format("status.autosave_error", &[("error", error)])
+                });
+            }
+            jobs::Outcome::Saved {
+                path,
+                snapshot,
+                result,
+            } => match result {
+                Ok(()) => {
+                    self.current_file = Some(path.clone());
+                    self.saved_snapshot = Some(snapshot);
+                    self.update_dirty();
+                    self.autosave();
+                    self.status = self
+                        .localizer
+                        .format("status.saved", &[("path", path.display().to_string())]);
+                    if !self.dirty
+                        && let Some(action) = self.pending_action.clone()
+                    {
+                        self.run_pending_action(&self.context.clone(), action);
+                    }
+                }
+                Err(error) => {
+                    self.status = self
+                        .localizer
+                        .format("status.save_error", &[("error", error)])
+                }
+            },
+            jobs::Outcome::Opened { path, result } => match result {
+                Ok((decoded, limited)) => {
+                    let needs_conversion = decoded.needs_conversion;
+                    self.plan = decoded.plan;
+                    self.rooms_need_refresh = false;
+                    self.room_detection_limited = limited;
+                    self.active_layer_id = DEFAULT_LAYER_ID.to_owned();
+                    self.assets = Arc::new(decoded.assets);
+                    self.rebuild_textures(&self.context.clone());
+                    self.selection = None;
+                    self.additional_selections.clear();
+                    self.clear_interaction();
+                    self.past.clear();
+                    self.future.clear();
+                    self.current_file = Some(path.clone());
+                    self.saved_snapshot = (!needs_conversion).then(|| self.snapshot());
+                    self.dirty = needs_conversion;
+                    self.status = if needs_conversion {
+                        self.localizer.text("status.legacy_opened")
+                    } else {
+                        self.localizer
+                            .format("status.opened", &[("path", path.display().to_string())])
+                    };
+                    self.autosave();
+                }
+                Err(error) => {
+                    self.status = self
+                        .localizer
+                        .format("status.read_error", &[("error", error)])
+                }
+            },
+            jobs::Outcome::Exported {
+                path,
+                format,
+                result,
+            } => {
+                self.status = match result {
+                    Ok(()) => self
+                        .localizer
+                        .format("status.exported", &[("path", path.display().to_string())]),
+                    Err(error) => self.localizer.format(
+                        "status.export_error",
+                        &[("format", format), ("error", error)],
+                    ),
+                };
+            }
+            jobs::Outcome::Rooms { plan, limited } => {
+                self.room_detection_limited = limited;
+                self.plan.rooms = plan.rooms;
+                self.plan.layer_assignments = plan.layer_assignments;
+                self.update_dirty();
+                self.autosave();
+            }
+            jobs::Outcome::Failed { recovery } => {
+                let message = self.localizer.text("status.task_failed");
+                if recovery {
+                    self.recovery_error = Some(message);
+                } else {
+                    self.status = message;
+                }
+            }
+        }
     }
 
     fn undo(&mut self) {
@@ -1596,7 +1820,8 @@ impl RppApp {
         self.clear_interaction();
         self.selection = None;
         self.additional_selections.clear();
-        self.dirty = true;
+        self.update_dirty();
+        self.trim_history(HISTORY_MEMORY_BUDGET);
         self.status = self.localizer.text("status.undo");
         self.autosave();
     }
@@ -1615,7 +1840,8 @@ impl RppApp {
         self.clear_interaction();
         self.selection = None;
         self.additional_selections.clear();
-        self.dirty = true;
+        self.update_dirty();
+        self.trim_history(HISTORY_MEMORY_BUDGET);
         self.status = self.localizer.text("status.redo");
         self.autosave();
     }
@@ -1633,6 +1859,8 @@ impl RppApp {
         self.current_file = None;
         self.past.clear();
         self.future.clear();
+        self.saved_snapshot = Some(self.snapshot());
+        self.rooms_need_refresh = false;
         self.dirty = false;
         self.status = self.localizer.text("status.new_plan");
         self.autosave();
@@ -1683,12 +1911,10 @@ impl RppApp {
             ui.horizontal(|ui| {
                 if ui.button(self.localizer.text("action.save")).clicked() {
                     self.save_plan();
-                    if !self.dirty {
-                        self.run_pending_action(ctx, action.clone());
-                    }
                 }
                 if ui.button(self.localizer.text("action.discard")).clicked() {
                     self.dirty = false;
+                    self.autosave();
                     self.run_pending_action(ctx, action.clone());
                 }
                 if ui.button(self.localizer.text("action.cancel")).clicked() {
@@ -1713,44 +1939,16 @@ impl RppApp {
     }
 
     fn open_path(&mut self, path: PathBuf) {
-        match storage::read_limited(&path, crate::format::MAX_PROJECT_BYTES) {
-            Ok(bytes) => match decode_plan(&bytes) {
-                Ok(decoded) => {
-                    let needs_conversion = decoded.needs_conversion;
-                    self.plan = decoded.plan;
-                    self.refresh_automatic_rooms();
-                    self.active_layer_id = DEFAULT_LAYER_ID.to_owned();
-                    self.assets = Arc::new(decoded.assets);
-                    let context = self.context.clone();
-                    self.rebuild_textures(&context);
-                    self.selection = None;
-                    self.additional_selections.clear();
-                    self.clear_interaction();
-                    self.past.clear();
-                    self.future.clear();
-                    self.current_file = Some(path.clone());
-                    self.dirty = needs_conversion;
-                    self.status = if needs_conversion {
-                        self.localizer.text("status.legacy_opened")
-                    } else {
-                        self.localizer
-                            .format("status.opened", &[("path", path.display().to_string())])
-                    };
-                    self.autosave();
-                }
-                Err(error) => {
-                    let error = self.format_error_text(&error);
-                    self.status = self
-                        .localizer
-                        .format("status.invalid_file", &[("error", error)])
-                }
-            },
-            Err(error) => {
-                self.status = self
-                    .localizer
-                    .format("status.read_error", &[("error", error.to_string())])
-            }
-        }
+        self.run_job(false, move || {
+            let result = storage::read_limited(&path, crate::format::MAX_PROJECT_BYTES)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| decode_plan(&bytes).map_err(|error| error.to_string()))
+                .map(|mut decoded| {
+                    let limited = rooms::refresh_rooms(&mut decoded.plan);
+                    (decoded, limited)
+                });
+            jobs::Outcome::Opened { path, result }
+        });
     }
 
     fn save_plan(&mut self) {
@@ -1815,23 +2013,21 @@ impl RppApp {
         else {
             return;
         };
-        self.status = match export::export_pdf(
-            &path,
-            &self.plan,
-            self.assets.as_slice(),
-            &self.localizer,
-            self.export_distances,
-            self.pdf_scale,
-            self.pdf_paper,
-        ) {
-            Ok(()) => self
-                .localizer
-                .format("status.exported", &[("path", path.display().to_string())]),
-            Err(error) => self.localizer.format(
-                "status.export_error",
-                &[("format", "PDF".to_owned()), ("error", error)],
-            ),
-        };
+        let plan = self.plan.clone();
+        let assets = Arc::clone(&self.assets);
+        let localizer = self.localizer.clone();
+        let distances = self.export_distances;
+        let scale = self.pdf_scale;
+        let paper = self.pdf_paper;
+        self.run_job(false, move || {
+            let result =
+                export::export_pdf(&path, &plan, &assets, &localizer, distances, scale, paper);
+            jobs::Outcome::Exported {
+                path,
+                format: "PDF".into(),
+                result,
+            }
+        });
     }
 
     fn export_image(&mut self, format: &str) {
@@ -1868,51 +2064,41 @@ impl RppApp {
         else {
             return;
         };
-        let result = match format {
-            "svg" => export::export_svg(
-                &path,
-                &self.plan,
-                self.assets.as_slice(),
-                &self.localizer,
-                self.export_distances,
-            ),
-            _ => export::export_png(
-                &path,
-                &self.plan,
-                self.assets.as_slice(),
-                &self.localizer,
-                self.export_distances,
-            ),
-        };
-        self.status = match result {
-            Ok(()) => self
-                .localizer
-                .format("status.exported", &[("path", path.display().to_string())]),
-            Err(error) => self.localizer.format(
-                "status.export_error",
-                &[("format", format.to_uppercase()), ("error", error)],
-            ),
-        };
+        let plan = self.plan.clone();
+        let assets = Arc::clone(&self.assets);
+        let localizer = self.localizer.clone();
+        let distances = self.export_distances;
+        let format = format.to_owned();
+        self.run_job(false, move || {
+            let result = match format.as_str() {
+                "svg" => export::export_svg(&path, &plan, &assets, &localizer, distances),
+                _ => export::export_png(&path, &plan, &assets, &localizer, distances),
+            };
+            jobs::Outcome::Exported {
+                path,
+                format: format.to_uppercase(),
+                result,
+            }
+        });
     }
 
     fn save_to(&mut self, path: PathBuf) {
-        let result = encode_project(&self.plan, self.assets.as_slice())
-            .map_err(|error| self.format_error_text(&error))
-            .and_then(|bytes| write_plan_safely(&path, &bytes).map_err(|error| error.to_string()));
-        match result {
-            Ok(()) => {
-                self.current_file = Some(path.clone());
-                self.dirty = false;
-                self.status = self
-                    .localizer
-                    .format("status.saved", &[("path", path.display().to_string())]);
+        self.cancel_interaction();
+        let plan = self.plan.clone();
+        let assets = Arc::clone(&self.assets);
+        let snapshot = self.snapshot();
+        self.run_job(false, move || {
+            let result = encode_project(&plan, &assets)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    write_plan_safely(&path, &bytes).map_err(|error| error.to_string())
+                });
+            jobs::Outcome::Saved {
+                path,
+                snapshot,
+                result,
             }
-            Err(error) => {
-                self.status = self
-                    .localizer
-                    .format("status.save_error", &[("error", error)])
-            }
-        }
+        });
     }
 
     fn import_image(&mut self) {
@@ -4978,6 +5164,10 @@ impl eframe::App for RppApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        while let Some(outcome) = self.worker.poll() {
+            self.finish_job(outcome);
+        }
+        self.dispatch_room_refresh();
         if !ctx.input(|input| input.focused) {
             self.cancel_interaction();
         }
@@ -4985,7 +5175,8 @@ impl eframe::App for RppApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_action = Some(PendingAction::Close);
         }
-        if self.pending_action.is_none()
+        if !self.busy
+            && self.pending_action.is_none()
             && let Some(path) = ctx.input_mut(|input| {
                 std::mem::take(&mut input.raw.dropped_files)
                     .into_iter()
@@ -4994,7 +5185,13 @@ impl eframe::App for RppApp {
         {
             self.request_open_path(path);
         }
-        self.keyboard_shortcuts(&ctx);
+        if self.busy {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ui.disable();
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else {
+            self.keyboard_shortcuts(&ctx);
+        }
         // Remember the popup state before drawing the top bar too: selecting a
         // menu item may close the popup during this pass, but that same click
         // must still not continue through to the canvas underneath.
@@ -5009,11 +5206,21 @@ impl eframe::App for RppApp {
                 || ctx.any_popup_open()
                 || self.settings_open
                 || self.layers_open
-                || self.pending_action.is_some(),
+                || self.pending_action.is_some()
+                || self.busy,
         );
-        self.confirm_discard_dialog(&ctx);
-        self.settings_window(&ctx);
-        self.layers_window(&ctx);
+        if self.busy {
+            egui::Modal::new(egui::Id::new("background-work")).show(&ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(self.localizer.text("status.working"));
+                });
+            });
+        } else {
+            self.confirm_discard_dialog(&ctx);
+            self.settings_window(&ctx);
+            self.layers_window(&ctx);
+        }
     }
 }
 
@@ -5867,9 +6074,11 @@ mod tests {
     };
 
     fn test_app(context: eframe::egui::Context) -> super::RppApp {
-        let mut app = super::RppApp::from_context(context);
+        let mut app = super::RppApp::from_context_with_recovery(context, None);
+        app.synchronous_jobs = true;
         app.recovery_path = None;
         app.plan = PlanFile::default();
+        app.saved_snapshot = Some(app.snapshot());
         app.dirty = false;
         app
     }
@@ -5880,26 +6089,27 @@ mod tests {
         let ctx = Context::default();
         let mut app = test_app(ctx.clone());
         let pointer = pos2(320.0, 240.0);
-        let mut run = |events| {
-            let _ = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
-                    events,
-                    ..Default::default()
-                },
-                |root| {
-                    CentralPanel::default().show(root, |ui| {
-                        let rect = ui.available_rect_before_wrap();
-                        let response = ui.allocate_rect(rect, Sense::click_and_drag());
-                        app.handle_canvas_input(&ctx, &response, rect);
-                    });
-                },
-            );
-        };
-        run(vec![Event::PointerMoved(pointer)]);
-        // Establish hover before sending a native macOS pinch event.
-        run(vec![]);
-        drop(run);
+        {
+            let mut run = |events| {
+                let _ = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |root| {
+                        CentralPanel::default().show(root, |ui| {
+                            let rect = ui.available_rect_before_wrap();
+                            let response = ui.allocate_rect(rect, Sense::click_and_drag());
+                            app.handle_canvas_input(&ctx, &response, rect);
+                        });
+                    },
+                );
+            };
+            run(vec![Event::PointerMoved(pointer)]);
+            // Establish hover before sending a native macOS pinch event.
+            run(vec![]);
+        }
         let initial_zoom = app.zoom;
         let initial_pan = app.pan;
         let mut canvas_rect = Rect::NOTHING;
@@ -6490,5 +6700,176 @@ mod tests {
         assert!(!app.batching_edits);
         app.undo();
         assert_eq!(app.plan.walls.len(), 2);
+    }
+    #[test]
+    fn undo_and_redo_track_the_last_saved_content_and_clear_recovery() {
+        let directory = tempfile::tempdir().expect("directory");
+        let mut app = test_app(eframe::egui::Context::default());
+        app.recovery_path = Some(directory.path().join("autosave.rpp"));
+        app.plan
+            .walls
+            .push(audit_wall("wall", 0.0, 0.0, 200.0, 0.0));
+        app.save_to(directory.path().join("plan.rpp"));
+        assert!(!app.dirty);
+        assert!(
+            crate::recovery::load(app.recovery_path.as_ref().expect("path"))
+                .expect("clean recovery")
+                .is_none()
+        );
+        let before = app.snapshot();
+        app.plan.walls[0].x2 = 250.0;
+        app.commit(before);
+        assert!(app.dirty);
+        assert!(
+            crate::recovery::load(app.recovery_path.as_ref().expect("path"))
+                .expect("recovery")
+                .is_some()
+        );
+        app.undo();
+        assert!(!app.dirty);
+        assert!(
+            crate::recovery::load(app.recovery_path.as_ref().expect("path"))
+                .expect("clean recovery")
+                .is_none()
+        );
+        app.redo();
+        assert!(app.dirty);
+        app.save_to(directory.path().join("plan.rpp"));
+        app.undo();
+        assert!(app.dirty);
+        app.redo();
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn recovered_document_retains_path_and_saved_content_is_not_dirty() {
+        let directory = tempfile::tempdir().expect("directory");
+        let project = directory.path().join("original.rpp");
+        let recovery = directory.path().join("autosave.rpp");
+        let mut app = test_app(eframe::egui::Context::default());
+        app.plan
+            .walls
+            .push(audit_wall("wall", 0.0, 0.0, 200.0, 0.0));
+        app.save_to(project.clone());
+        crate::recovery::save(&recovery, &app.plan, &app.assets, Some(&project), true)
+            .expect("stale dirty marker");
+        app.recovery_path = Some(recovery.clone());
+        app.restore_recovery(&app.context.clone());
+        assert_eq!(app.current_file.as_ref(), Some(&project));
+        assert!(!app.dirty);
+        assert!(
+            crate::recovery::load(&recovery)
+                .expect("cleared marker")
+                .is_none()
+        );
+        let before = app.snapshot();
+        app.plan.walls[0].x2 = 300.0;
+        app.commit(before);
+        let mut restored = test_app(eframe::egui::Context::default());
+        restored.recovery_path = Some(recovery);
+        restored.restore_recovery(&restored.context.clone());
+        assert_eq!(restored.current_file.as_ref(), Some(&project));
+        assert!(restored.dirty);
+        assert_eq!(restored.plan.walls[0].x2, 300.0);
+    }
+
+    #[test]
+    fn history_memory_budget_covers_both_stacks_and_retained_image_bytes() {
+        use std::sync::Arc;
+        let mut app = test_app(eframe::egui::Context::default());
+        let entry = app.snapshot();
+        let one = entry.memory_bytes();
+        app.past = vec![entry.clone(), entry.clone()];
+        app.future = vec![entry.clone(), entry];
+        app.trim_history(one * 2);
+        assert!(app.history_bytes() <= one * 2);
+        assert_eq!(app.past.len() + app.future.len(), 2);
+        let mut retained = app.snapshot();
+        retained.assets = Arc::new(vec![crate::model::ProjectAsset {
+            id: "large".into(),
+            name: "large".into(),
+            extension: "png".into(),
+            bytes: vec![0; one * 4],
+        }]);
+        app.past.push(retained);
+        app.trim_history(one * 2);
+        assert!(app.history_bytes() <= one * 2);
+    }
+
+    #[test]
+    fn async_save_keeps_edits_made_after_its_snapshot_dirty() {
+        let directory = tempfile::tempdir().expect("directory");
+        let mut app = test_app(eframe::egui::Context::default());
+        app.synchronous_jobs = false;
+        app.plan
+            .walls
+            .push(audit_wall("wall", 0.0, 0.0, 200.0, 0.0));
+        let path = directory.path().join("plan.rpp");
+        app.save_to(path.clone());
+        assert!(app.busy);
+        app.plan.walls[0].x2 = 250.0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.busy {
+            if let Some(outcome) = app.worker.poll() {
+                app.finish_job(outcome);
+            } else {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "save worker timed out"
+                );
+                std::thread::yield_now();
+            }
+        }
+        assert!(app.dirty);
+        let saved =
+            crate::format::decode_plan(&std::fs::read(path).expect("saved file")).expect("plan");
+        assert_eq!(saved.plan.walls[0].x2, 200.0);
+    }
+    #[test]
+    fn large_room_detection_runs_in_worker_and_keeps_edit_undoable() {
+        let mut app = test_app(eframe::egui::Context::default());
+        app.synchronous_jobs = false;
+        app.plan.walls = vec![
+            audit_wall("north", 0.0, 0.0, 200.0, 0.0),
+            audit_wall("east", 200.0, 0.0, 200.0, 200.0),
+            audit_wall("south", 200.0, 200.0, 0.0, 200.0),
+            audit_wall("west", 0.0, 200.0, 0.0, 0.0),
+        ];
+        for index in 0..125 {
+            let y = 1000.0 + index as f32 * 100.0;
+            app.plan
+                .walls
+                .push(audit_wall(&format!("extra-{index}"), 1000.0, y, 1200.0, y));
+        }
+        assert!(!super::rooms::refresh_rooms(&mut app.plan));
+        assert_eq!(app.plan.rooms.len(), 1);
+        app.saved_snapshot = Some(app.snapshot());
+        let before = app.snapshot();
+        app.plan.walls[0].x1 = 50.0;
+        app.commit(before);
+        assert!(app.rooms_need_refresh);
+        assert!(!app.busy);
+        app.dispatch_room_refresh();
+        assert!(app.busy);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.busy {
+            if let Some(outcome) = app.worker.poll() {
+                app.finish_job(outcome);
+            } else {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "room worker timed out"
+                );
+                std::thread::yield_now();
+            }
+        }
+        assert!(app.plan.rooms.is_empty());
+        assert_eq!(app.past.len(), 1);
+        app.undo();
+        assert_eq!(app.plan.rooms.len(), 1);
+        assert!(!app.dirty);
+        app.redo();
+        assert!(app.plan.rooms.is_empty());
+        assert!(app.dirty);
     }
 }

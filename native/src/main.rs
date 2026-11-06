@@ -12,6 +12,7 @@ mod input;
 mod localization;
 mod model;
 mod platform;
+mod recovery;
 mod room_detection;
 mod storage;
 

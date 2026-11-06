@@ -28,3 +28,13 @@ Fixes:
 See AUDIT.md for verification and practical limits. Windows binaries are unsigned;
 macOS apps have an ad-hoc signature and are not Apple notarized. Native pinch
 availability depends on the OS, driver and windowing backend.
+
+Working-tree corrections (not yet published):
+- Recovery sessions retain the source path and clean/unsaved status; saving or
+  discarding a document clears its recovery, including undo back to saved content.
+- PDF export preserves vector paths and text; imported raster images remain raster.
+- Undo/redo share a 64 MiB allocation budget as well as the 100-state limit.
+- Opening, compression, recovery and exports run off-thread; room recalculation
+  above 128 walls shows an activity indicator while the worker finishes.
+- Updated the project-format specification and documented the internal recovery
+  envelope separately from portable RPP-PLAN 2 projects.

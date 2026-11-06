@@ -47,8 +47,17 @@ Preferences and recovery files use each operating system's user directories:
 | macOS | `~/Library/Application Support/RPP/` | Same directory |
 | Linux | `$XDG_CONFIG_HOME/rpp/` (default `~/.config/rpp/`) | `$XDG_DATA_HOME/rpp/` (default `~/.local/share/rpp/`) |
 
-Existing Windows preferences remain in their original location. Recovered
-plans are marked as unsaved. Project files remain portable between systems.
+Existing Windows preferences remain in their original location. Recovery keeps
+unsaved changes and the original project path; clean or discarded sessions are
+not restored. Undo/redo updates the modified flag by comparing with the last
+saved content. Project files remain portable between systems.
+
+File opening, save/recovery compression and SVG/PNG/PDF export run in a serialized
+background queue. Automatic room detection also runs there above 128 walls.
+Foreground operations show an activity indicator and temporarily pause editing;
+recovery runs while editing continues. Snapshot cloning, validation, painting and
+small room calculations still use the UI thread, so this is not a guarantee of
+zero pauses on maximum-size plans.
 
 ## The first five minutes
 
@@ -87,9 +96,10 @@ What already works:
 - room names, types, surface, perimeter and optional fill;
 - ordered layers with visibility, locking, opacity and per-item assignment;
 - reusable PNG, JPEG, GIF, BMP and WebP assets stored inside the project;
-- multi-selection, rectangular selection, alignment and 100 undo steps;
+- multi-selection, rectangular selection, alignment and up to 100 undo/redo states
+  within a 64 MiB history allocation budget;
 - millimeters, centimeters, meters, inches and feet;
-- SVG, PNG and one-page PDF export at a chosen scale;
+- SVG, PNG and vector one-page PDF export at a chosen scale;
 - English, French and Spanish;
 - Light, Dark and Warm Dark themes.
 

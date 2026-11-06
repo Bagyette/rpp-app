@@ -8,73 +8,11 @@ use crate::room_detection::{
 
 impl RppApp {
     pub(super) fn refresh_automatic_rooms(&mut self) {
-        let previous = self
-            .plan
-            .rooms
-            .iter()
-            .filter(|room| room.source == RoomSource::Automatic)
-            .cloned()
-            .collect::<Vec<_>>();
-        let manual = self
-            .plan
-            .rooms
-            .iter()
-            .filter(|room| room.source == RoomSource::Manual)
-            .cloned()
-            .collect::<Vec<_>>();
-        let Ok(polygons) = detect_room_polygons(&self.plan.walls) else {
-            self.room_detection_limited = true;
-            return;
-        };
-        self.room_detection_limited = false;
-        let mut automatic = Vec::new();
-        let mut transferred_layers = Vec::new();
-
-        for points in polygons {
-            let id = stable_room_id(&points);
-            let center = polygon_center(&points);
-            let metadata = previous.iter().find(|room| room.id == id).or_else(|| {
-                previous
-                    .iter()
-                    .filter(|room| {
-                        point_in_polygon(center, &room.points)
-                            || point_in_polygon(polygon_center(&room.points), &points)
-                    })
-                    .min_by(|a, b| {
-                        polygon_center(&a.points)
-                            .distance(center)
-                            .total_cmp(&polygon_center(&b.points).distance(center))
-                    })
-            });
-            if let Some(metadata) = metadata {
-                transferred_layers
-                    .push((id.clone(), self.plan.layer_id_for(&metadata.id).to_owned()));
-            }
-            automatic.push(Room {
-                id,
-                name: metadata.map_or_else(String::new, |room| room.name.clone()),
-                kind: metadata.map_or(RoomKind::Custom, |room| room.kind),
-                source: RoomSource::Automatic,
-                points,
-                fill_color: metadata.map_or([220, 230, 239], |room| room.fill_color),
-                fill_visible: metadata.is_none_or(|room| room.fill_visible),
-                locked: metadata.is_some_and(|room| room.locked),
-            });
-        }
-
-        let valid_ids = manual
-            .iter()
-            .chain(automatic.iter())
-            .map(|room| room.id.as_str())
-            .collect::<std::collections::HashSet<_>>();
-        self.plan.layer_assignments.retain(|assignment| {
-            !assignment.item_id.starts_with("room-auto-")
-                || valid_ids.contains(assignment.item_id.as_str())
-        });
-        self.plan.rooms = manual;
-        self.plan.rooms.extend(automatic);
-        for (id, layer_id) in transferred_layers {
-            self.plan.assign_to_layer(&id, &layer_id);
+        if self.plan.walls.len() > 128 {
+            // Dispatch once at the next frame, after the current edit has committed.
+            self.rooms_need_refresh = true;
+        } else {
+            self.room_detection_limited = refresh_rooms(&mut self.plan);
         }
     }
 
@@ -181,4 +119,72 @@ impl RppApp {
             }
         }
     }
+}
+
+pub(super) fn refresh_rooms(plan: &mut crate::model::PlanFile) -> bool {
+    let previous = plan
+        .rooms
+        .iter()
+        .filter(|room| room.source == RoomSource::Automatic)
+        .cloned()
+        .collect::<Vec<_>>();
+    let manual = plan
+        .rooms
+        .iter()
+        .filter(|room| room.source == RoomSource::Manual)
+        .cloned()
+        .collect::<Vec<_>>();
+    let Ok(polygons) = detect_room_polygons(&plan.walls) else {
+        return true;
+    };
+    let mut automatic = Vec::new();
+    let mut transferred_layers = Vec::new();
+
+    for points in polygons {
+        let id = stable_room_id(&points);
+        let center = polygon_center(&points);
+        let metadata = previous.iter().find(|room| room.id == id).or_else(|| {
+            previous
+                .iter()
+                .filter(|room| {
+                    point_in_polygon(center, &room.points)
+                        || point_in_polygon(polygon_center(&room.points), &points)
+                })
+                .min_by(|a, b| {
+                    polygon_center(&a.points)
+                        .distance(center)
+                        .total_cmp(&polygon_center(&b.points).distance(center))
+                })
+        });
+        if let Some(metadata) = metadata {
+            transferred_layers.push((id.clone(), plan.layer_id_for(&metadata.id).to_owned()));
+        }
+        automatic.push(Room {
+            id,
+            name: metadata.map_or_else(String::new, |room| room.name.clone()),
+            kind: metadata.map_or(RoomKind::Custom, |room| room.kind),
+            source: RoomSource::Automatic,
+            points,
+            fill_color: metadata.map_or([220, 230, 239], |room| room.fill_color),
+            fill_visible: metadata.is_none_or(|room| room.fill_visible),
+            locked: metadata.is_some_and(|room| room.locked),
+        });
+    }
+
+    let valid_ids = manual
+        .iter()
+        .chain(automatic.iter())
+        .map(|room| room.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    plan.layer_assignments.retain(|assignment| {
+        !assignment.item_id.starts_with("room-auto-")
+            || valid_ids.contains(assignment.item_id.as_str())
+    });
+    plan.rooms = manual;
+    plan.rooms.extend(automatic);
+    for (id, layer_id) in transferred_layers {
+        plan.assign_to_layer(&id, &layer_id);
+    }
+
+    false
 }

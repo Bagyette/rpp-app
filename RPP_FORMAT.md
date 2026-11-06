@@ -1,6 +1,7 @@
 # RPP project container and RPP-PLAN specification
 
-RPP 0.8.0 saves one project using two simple layers:
+This specification describes the RPP 0.9.1 project reader/writer and the current
+working-tree recovery implementation. Portable projects use two simple layers:
 
 1. **RPP project container** — the ZIP-compatible binary file carrying the
    `.rpp` extension;
@@ -107,7 +108,10 @@ The `.rpp` extension is a file association, not encryption. Rename a copy to
 - Line endings may be Windows `CRLF` or Unix `LF`.
 - Empty lines are ignored.
 - Instructions and enumerated values are case-sensitive.
-- Tokens are separated by one or more whitespace characters.
+- Ordinary instruction tokens are separated by one or more whitespace characters.
+- For the four JSON-string instructions (`TEXT`, `OBJECT_NAME`, `ROOM_NAME`,
+  `LAYER`), put an ASCII space immediately after the keyword; the reader uses
+  that prefix to distinguish their string/comment handling.
 - Decimal numbers use a period, for example `12.5`.
 - `NaN`, positive infinity, and negative infinity are rejected.
 
@@ -119,7 +123,7 @@ The first non-empty, non-comment instruction must be:
 RPP-PLAN 2
 ```
 
-The RPP-PLAN version is independent from the application version. RPP 0.8.0
+The RPP-PLAN version is independent from the application version. RPP 0.9.1
 writes version 2.
 
 The legacy header below is still accepted:
@@ -172,7 +176,7 @@ For ordinary instructions, `#` starts a comment:
 WALL north 0 0 400 0 20 exterior false 34383b # exterior wall
 ```
 
-`TEXT` and `OBJECT_NAME` lines are special because their JSON string may
+`TEXT`, `OBJECT_NAME`, `ROOM_NAME`, and `LAYER` lines are special because their JSON string may
 contain `#`:
 
 ```text
@@ -181,8 +185,7 @@ OBJECT_NAME desk-1 "Desk #1"
 ```
 
 The complete remainder of these lines must be valid JSON string content.
-Do not append a trailing `# comment` after a `TEXT` or `OBJECT_NAME`
-instruction.
+Do not append a trailing `# comment` after any of these four instructions.
 
 Comments are accepted when reading handwritten files. RPP currently rewrites
 `plan.data` when saving and does **not** preserve original comments, blank-line
@@ -216,9 +219,10 @@ fenêtre
 ../image
 ```
 
-All plan-item identifiers share one global namespace. A wall, door, object,
-text, area, compass rose, arrow, or image instance cannot reuse another plan
-item's identifier.
+All plan-item identifiers share one global namespace. Walls, lines, doors,
+windows, objects, text, areas, rooms, compass roses, arrows, and image instances
+cannot reuse another plan item's identifier. Layer identifiers have a separate
+namespace and must be unique among layers.
 
 Asset identifiers are validated separately and must be unique among assets.
 
@@ -627,11 +631,19 @@ LAYER <id> <visible> <locked> <opacity> <JSON name>
 ASSIGN <item-id> <layer-id>
 ```
 
-Opacity is from `0` to `1`. Layers are drawn in file order: the first is at the
-bottom and the last is at the top. A locked layer prevents its items from being
-selected or moved. A hidden layer is omitted from the editor and exports.
+Opacity is from `0` to `1`. Layers are drawn in stored order: the first is at the
+bottom and the last is at the top. The text reader starts with `default` at the
+bottom and appends each newly declared layer. A repeated `LAYER` identifier
+updates that layer in place without moving it. A locked layer protects its items from
+editing, deletion, nudging, splitting, and dragging. A hidden layer is omitted
+from the editor and exports. Openings also follow their parent wall's visibility.
 
-Items without an `ASSIGN` instruction belong to the built-in `default` layer.
+A valid plan must include a layer whose identifier is `default`. The text reader
+creates it before parsing instructions, even when only other layers are declared.
+A `LAYER default ...` instruction updates its properties. JSON/legacy binary
+readers validate their stored layer list and reject a missing default layer.
+
+Items without an `ASSIGN` instruction belong to the `default` layer.
 Each item may have at most one assignment. Deleting a layer in the application
 moves its items back to the default layer.
 
@@ -829,7 +841,7 @@ Text syntax errors include a one-based line number.
 
 ## 7. Security and complexity limits
 
-RPP 0.8.0 applies these limits:
+RPP 0.9.1 applies these limits:
 
 | Resource | Limit |
 |---|---:|
@@ -862,7 +874,7 @@ arbitrary stored paths, preventing path traversal during normal loading.
 
 ## 8. Compatibility and migration
 
-RPP 0.8.0 can open:
+RPP 0.9.1 can open:
 
 - packaged `.rpp` ZIP containers containing `RPP-PLAN 2`;
 - standalone readable `RPP-PLAN 2` text;
@@ -961,7 +973,7 @@ plans miserable to maintain. Future changes therefore follow these rules:
 - add parser, writer, validation, migration, and round-trip tests.
 
 
-### Reader hardening in 0.9.1
+### 10.1 Reader hardening in 0.9.1
 
 Readers bound disk reads before decoding, cap cumulative ZIP expansion, limit
 legacy zlib expansion to the declared uncompressed size, and reject duplicate
@@ -973,3 +985,44 @@ Automatic room detection has a separate computational budget: 4,096 input walls,
 200,000 candidate intersection pairs and 10,000 split segments. If a plan exceeds
 that budget, existing room metadata is retained and the editor displays a warning;
 the document can still be opened and edited.
+
+## 11. Recovery sessions (internal, not a portable project)
+
+The current working tree stores recovery in the platform's `autosave.rpp` path,
+but the new session envelope is **not** the ZIP project container described
+above. Do not rename it to ZIP or use it as a normal project file. An explicit
+Save still writes the unchanged ZIP/RPP-PLAN 2 format.
+
+The recovery envelope is a single atomically replaced file:
+
+| Component | Encoding |
+|---|---|
+| Magic | ASCII `RPP-RECOVERY-1` followed by one LF byte |
+| Metadata length | Unsigned 32-bit little-endian byte count |
+| Metadata | UTF-8 JSON, at most 64 KiB |
+| Project payload | Normal packaged `.rpp` bytes, present only for an unsaved session |
+
+Metadata has these fields:
+
+```json
+{"source": "C:\\Plans\\house.rpp", "unsaved": true}
+```
+
+`source` is the original project path, or `null` for an untitled plan. It is
+session-local and may be platform-specific; it is never written into a portable
+project. `unsaved: false` is a clean-session marker with no project payload.
+Saved, new, explicitly discarded, and undo-to-saved sessions write that marker
+so a later launch cannot resurrect an already saved or discarded plan.
+
+Only unsaved sessions are recovered. Recovery preserves the original path and
+compares restored contents with the saved project when that file is readable.
+If the contents already match, the recovered document is clean and the recovery
+marker is cleared. If the original file is missing or differs, recovered changes
+remain unsaved. Old recovery files containing a plain project are still accepted;
+they lack an original path and are treated as unsaved for compatibility.
+
+Recovery jobs are serialized with foreground file operations. At most one pending
+recovery snapshot is retained; newer edits replace queued recovery work. Normal
+application exit flushes the queue. Forced termination cannot guarantee that a
+pending write has finished. The total envelope read limit is the 256 MiB project
+limit plus 64 KiB of metadata, the magic, and the four-byte length field.

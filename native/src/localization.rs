@@ -2,18 +2,19 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Catalog {
     default_language: String,
     languages: BTreeMap<String, Language>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Language {
     name: String,
     strings: BTreeMap<String, String>,
 }
 
+#[derive(Clone)]
 pub struct Localizer {
     catalog: Catalog,
     current_language: String,

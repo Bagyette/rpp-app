@@ -66,3 +66,29 @@ References: [ZIP advisory](https://rustsec.org/advisories/RUSTSEC-2026-0367.html
   unbounded paths; maximum-size projects can still pause the UI.
 - The existing editor architecture and approximate text/measurement extents are
   retained. Google-style exceptions are documented in STYLE.md.
+
+## Working-tree follow-up (2026-11-06, not yet published)
+
+Recovery now uses a single atomic session envelope with source path and an
+unsaved flag. Clean/discarded sessions write a marker without a project payload.
+Undo/redo compare with a retained saved snapshot. Both history stacks share an
+estimated 64 MiB owned-allocation budget, counting retained image assets once.
+
+PDF generation now converts SVG paths/text directly through `svg2pdf`; it no
+longer embeds a full-canvas screenshot. Imported raster assets retain their
+original raster nature. The PDF converter uses its own compatible usvg parser;
+font data/fallback selection comes from the same database as other exports.
+
+A serialized worker handles opening, project/recovery serialization, atomic
+writes and all export formats. Pending recovery work is coalesced. Room detection
+above 128 walls is dispatched once after the current edit commits. Foreground
+work shows indeterminate progress and pauses editing to preserve snapshot
+consistency; recovery runs while the user edits. Worker failures return to the
+status UI, and normal exit flushes pending recovery.
+
+Practical limits remain: cloning snapshots, validation, texture upload, rendering
+and small room recalculations still run on the UI thread. Very large documents
+can therefore still pause briefly. The queue cannot finish writes after forced
+process termination. Legacy recoveries lack session metadata and remain treated
+as unsaved. Native interaction/performance and non-Windows builds have not been
+revalidated for this follow-up.

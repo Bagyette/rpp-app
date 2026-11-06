@@ -789,6 +789,111 @@ impl Snapshot {
         }
     }
 
+    pub fn matches_project(&self, plan: &PlanFile, assets: &Arc<Vec<ProjectAsset>>) -> bool {
+        (Arc::ptr_eq(&self.assets, assets) || self.assets == *assets)
+            && self.walls == plan.walls
+            && self.lines == plan.lines
+            && self.doors == plan.doors
+            && self.windows == plan.windows
+            && self.objects == plan.objects
+            && self.images == plan.images
+            && self.texts == plan.texts
+            && self.areas == plan.areas
+            && self.compasses == plan.compasses
+            && self.arrows == plan.arrows
+            && self.rooms == plan.rooms
+            && self.layers == plan.layers
+            && self.layer_assignments == plan.layer_assignments
+    }
+
+    /// Owned allocations retained by an undo entry; image bytes are counted separately.
+    pub fn memory_bytes(&self) -> usize {
+        let mut bytes = std::mem::size_of::<Self>();
+        bytes += self.walls.capacity() * std::mem::size_of::<Wall>();
+        bytes += self
+            .walls
+            .iter()
+            .map(|item| item.id.capacity())
+            .sum::<usize>();
+        bytes += self.lines.capacity() * std::mem::size_of::<PlanLine>();
+        bytes += self
+            .lines
+            .iter()
+            .map(|item| item.id.capacity())
+            .sum::<usize>();
+        bytes += self.doors.capacity() * std::mem::size_of::<Door>();
+        bytes += self
+            .doors
+            .iter()
+            .map(|item| item.id.capacity() + item.wall_id.capacity())
+            .sum::<usize>();
+        bytes += self.windows.capacity() * std::mem::size_of::<Window>();
+        bytes += self
+            .windows
+            .iter()
+            .map(|item| item.id.capacity() + item.wall_id.capacity())
+            .sum::<usize>();
+        bytes += self.objects.capacity() * std::mem::size_of::<PlanObject>();
+        bytes += self
+            .objects
+            .iter()
+            .map(|item| item.id.capacity() + item.name.capacity())
+            .sum::<usize>();
+        bytes += self.images.capacity() * std::mem::size_of::<ImageObject>();
+        bytes += self
+            .images
+            .iter()
+            .map(|item| item.id.capacity() + item.asset_id.capacity())
+            .sum::<usize>();
+        bytes += self.texts.capacity() * std::mem::size_of::<TextObject>();
+        bytes += self
+            .texts
+            .iter()
+            .map(|item| item.id.capacity() + item.text.capacity())
+            .sum::<usize>();
+        bytes += self.areas.capacity() * std::mem::size_of::<AreaShape>();
+        bytes += self
+            .areas
+            .iter()
+            .map(|item| item.id.capacity() + item.points.capacity() * std::mem::size_of::<Point>())
+            .sum::<usize>();
+        bytes += self.compasses.capacity() * std::mem::size_of::<CompassRose>();
+        bytes += self
+            .compasses
+            .iter()
+            .map(|item| item.id.capacity())
+            .sum::<usize>();
+        bytes += self.arrows.capacity() * std::mem::size_of::<PlanArrow>();
+        bytes += self
+            .arrows
+            .iter()
+            .map(|item| item.id.capacity())
+            .sum::<usize>();
+        bytes += self.rooms.capacity() * std::mem::size_of::<Room>();
+        bytes += self
+            .rooms
+            .iter()
+            .map(|item| {
+                item.id.capacity()
+                    + item.name.capacity()
+                    + item.points.capacity() * std::mem::size_of::<Point>()
+            })
+            .sum::<usize>();
+        bytes += self.layers.capacity() * std::mem::size_of::<Layer>();
+        bytes += self
+            .layers
+            .iter()
+            .map(|item| item.id.capacity() + item.name.capacity())
+            .sum::<usize>();
+        bytes += self.layer_assignments.capacity() * std::mem::size_of::<LayerAssignment>();
+        bytes += self
+            .layer_assignments
+            .iter()
+            .map(|item| item.item_id.capacity() + item.layer_id.capacity())
+            .sum::<usize>();
+        bytes
+    }
+
     pub fn restore(self, plan: &mut PlanFile, assets: &mut Arc<Vec<ProjectAsset>>) {
         plan.walls = self.walls;
         plan.lines = self.lines;
